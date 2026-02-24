@@ -1,8 +1,23 @@
 import { Router, Response } from 'express';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { prisma } from '../index.js';
 import { AuthenticatedRequest, requireWriteAccess } from '../middleware/dashboardAuth.js';
 
 export const adminModelsRoutes = Router();
+
+// ============================================
+// VL Test Image: load once at module scope
+// ============================================
+let vlTestImageBase64: string | null = null;
+try {
+  const imagePath = join(process.cwd(), 'image.png');
+  const imageBuffer = readFileSync(imagePath);
+  vlTestImageBase64 = imageBuffer.toString('base64');
+  console.log(`[VLTest] Test image loaded (${(imageBuffer.length / 1024).toFixed(0)} KB)`);
+} catch (err) {
+  console.warn('[VLTest] Could not load image.png for VL testing:', err);
+}
 
 // ============================================
 // Helper: Health check a model endpoint
@@ -35,8 +50,13 @@ async function runSingleTest(
   const model = body.model || 'unknown';
   const start = Date.now();
 
-  // Sanitize request body for logging (mask API key)
-  const logBody = { ...body };
+  // Sanitize request body for logging/frontend (truncate base64 images)
+  const logBody = JSON.parse(JSON.stringify(body, (key, value) => {
+    if (key === 'url' && typeof value === 'string' && value.startsWith('data:image/')) {
+      return value.substring(0, 40) + '...[base64 truncated]';
+    }
+    return value;
+  }));
   console.log(`[EndpointTest] ${testName} 시작 | model=${model} | url=${url}`);
   console.log(`[EndpointTest] ${testName} Request Body:`, JSON.stringify(logBody, null, 2));
 
@@ -134,7 +154,10 @@ async function testEndpointHealth(
   modelName?: string | null
 ): Promise<{
   chatCompletion: TestResult;
-  toolCall: TestResult;
+  toolCallA: TestResult;
+  toolCallB: TestResult;
+  toolCallC: TestResult;
+  toolCallD: TestResult;
   allPassed: boolean;
 }> {
   const model = modelName || 'gpt-4';
@@ -146,7 +169,7 @@ async function testEndpointHealth(
     stream: false,
   };
 
-  const toolBody = {
+  const toolBase = {
     model,
     messages: [{ role: 'user', content: 'What is the weather in Seoul?' }],
     tools: [{
@@ -161,22 +184,142 @@ async function testEndpointHealth(
         },
       },
     }],
-    tool_choice: 'required',
+    stream: false,
+  };
+
+  // 4 Tool Call scenarios
+  const toolBodyA = { ...toolBase, temperature: 0, tool_choice: 'required' };
+  const toolBodyB = { ...toolBase, temperature: 0 };
+  const toolBodyC = { ...toolBase, tool_choice: 'required' };
+  const toolBodyD = { ...toolBase };
+
+  console.log(`[EndpointTest] ========== 테스트 시작 (5건) | model=${model} | endpoint=${endpointUrl} ==========`);
+
+  const [chatCompletion, toolCallA, toolCallB, toolCallC, toolCallD] = await Promise.all([
+    runSingleTest('ChatCompletion', endpointUrl, apiKey, extraHeaders, chatBody),
+    runSingleTest('ToolCall-A (temp=0,required)', endpointUrl, apiKey, extraHeaders, toolBodyA, true),
+    runSingleTest('ToolCall-B (temp=0,auto)', endpointUrl, apiKey, extraHeaders, toolBodyB, true),
+    runSingleTest('ToolCall-C (default,required)', endpointUrl, apiKey, extraHeaders, toolBodyC, true),
+    runSingleTest('ToolCall-D (default,auto)', endpointUrl, apiKey, extraHeaders, toolBodyD, true),
+  ]);
+
+  const allPassed = chatCompletion.passed && toolCallA.passed && toolCallB.passed && toolCallC.passed && toolCallD.passed;
+  console.log(`[EndpointTest] ========== 테스트 완료 | model=${model} | chat=${chatCompletion.passed ? 'PASS' : 'FAIL'} | A=${toolCallA.passed ? 'PASS' : 'FAIL'} | B=${toolCallB.passed ? 'PASS' : 'FAIL'} | C=${toolCallC.passed ? 'PASS' : 'FAIL'} | D=${toolCallD.passed ? 'PASS' : 'FAIL'} | result=${allPassed ? 'ALL PASS' : 'FAIL'} ==========`);
+
+  return { chatCompletion, toolCallA, toolCallB, toolCallC, toolCallD, allPassed };
+}
+
+// ============================================
+// VL (Vision-Language) Test
+// ============================================
+async function testVisionLanguage(
+  endpointUrl: string,
+  apiKey?: string | null,
+  extraHeaders?: Record<string, string> | null,
+  modelName?: string | null
+): Promise<{
+  visionDescribe: TestResult;
+  visionJudge: TestResult;
+  passed: boolean;
+}> {
+  const model = modelName || 'gpt-4';
+
+  if (!vlTestImageBase64) {
+    const failResult: TestResult = {
+      passed: false, latencyMs: 0,
+      message: 'VL test image not loaded. Ensure image.png exists in project root.',
+    };
+    return { visionDescribe: failResult, visionJudge: failResult, passed: false };
+  }
+
+  console.log(`[VLTest] ========== VL 테스트 시작 | model=${model} | endpoint=${endpointUrl} ==========`);
+
+  // Step 1: Send image and ask for description
+  const describeBody = {
+    model,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Describe this image in detail.' },
+        { type: 'image_url', image_url: { url: `data:image/png;base64,${vlTestImageBase64}` } },
+      ],
+    }],
+    max_tokens: 1024,
+    stream: false,
+  };
+
+  const visionDescribe = await runSingleTest('VL-Describe', endpointUrl, apiKey, extraHeaders, describeBody);
+
+  if (!visionDescribe.passed) {
+    console.error(`[VLTest] VL-Describe 실패, Judge 단계 건너뜀`);
+    const judgeSkip: TestResult = { passed: false, latencyMs: 0, message: 'Skipped: VL-Describe step failed' };
+    return { visionDescribe, visionJudge: judgeSkip, passed: false };
+  }
+
+  // Extract description from response
+  const responseObj = visionDescribe.response as Record<string, any>;
+  const description = responseObj?.choices?.[0]?.message?.content || '';
+
+  if (!description || typeof description !== 'string' || description.trim().length < 10) {
+    console.error(`[VLTest] VL-Describe 응답이 비어있거나 너무 짧음: "${(description || '').substring(0, 100)}"`);
+    const emptyResult: TestResult = {
+      passed: false, latencyMs: visionDescribe.latencyMs,
+      message: `VL description is empty or too short: "${(description || '').substring(0, 100)}"`,
+      request: visionDescribe.request, response: visionDescribe.response,
+    };
+    return { visionDescribe: emptyResult, visionJudge: { passed: false, latencyMs: 0, message: 'Skipped' }, passed: false };
+  }
+
+  // Step 2: Ask the SAME model to judge
+  const referenceAnswer = 'The image shows a hand gripping/holding Korean won banknotes (500 won, 1000 won bills) in an illustrated/cartoon style with a yellow background.';
+
+  const judgeBody = {
+    model,
+    messages: [{
+      role: 'user',
+      content: `You are an image description evaluator. Compare the model's description against a reference answer.
+
+Reference answer: "${referenceAnswer}"
+
+Model's description: "${description}"
+
+Key elements to check:
+1. Mentions hand(s) or holding/gripping
+2. Mentions Korean money/banknotes/won/currency
+3. Mentions illustration/cartoon/drawing style or yellow background
+4. Mentions specific denominations (500 and/or 1000)
+
+If the description captures at least 3 of these 4 elements, respond with exactly "PASS". Otherwise respond with exactly "FAIL" followed by a brief explanation.`,
+    }],
+    max_tokens: 256,
     temperature: 0,
     stream: false,
   };
 
-  console.log(`[EndpointTest] ========== 테스트 시작 | model=${model} | endpoint=${endpointUrl} ==========`);
+  const visionJudge = await runSingleTest('VL-Judge', endpointUrl, apiKey, extraHeaders, judgeBody);
 
-  const [chatCompletion, toolCall] = await Promise.all([
-    runSingleTest('ChatCompletion', endpointUrl, apiKey, extraHeaders, chatBody),
-    runSingleTest('ToolCall', endpointUrl, apiKey, extraHeaders, toolBody, true),
-  ]);
+  if (!visionJudge.passed) {
+    console.error(`[VLTest] VL-Judge 요청 실패`);
+    return { visionDescribe, visionJudge, passed: false };
+  }
 
-  const allPassed = chatCompletion.passed && toolCall.passed;
-  console.log(`[EndpointTest] ========== 테스트 완료 | model=${model} | chat=${chatCompletion.passed ? 'PASS' : 'FAIL'} | tool=${toolCall.passed ? 'PASS' : 'FAIL'} | result=${allPassed ? 'ALL PASS' : 'FAIL'} ==========`);
+  // Check judge verdict
+  const judgeResponse = visionJudge.response as Record<string, any>;
+  const judgeContent = (judgeResponse?.choices?.[0]?.message?.content || '').trim();
+  const judgeOk = judgeContent.toUpperCase().startsWith('PASS');
 
-  return { chatCompletion, toolCall, allPassed };
+  if (!judgeOk) {
+    console.error(`[VLTest] VL-Judge 판정: FAIL | ${judgeContent.substring(0, 300)}`);
+    const failJudge: TestResult = {
+      ...visionJudge,
+      passed: false,
+      message: `VL Judge: ${judgeContent.substring(0, 300)}`,
+    };
+    return { visionDescribe, visionJudge: failJudge, passed: false };
+  }
+
+  console.log(`[VLTest] ========== VL 테스트 통과 | model=${model} ==========`);
+  return { visionDescribe, visionJudge, passed: true };
 }
 
 // ============================================
@@ -508,6 +651,31 @@ adminModelsRoutes.post('/test', requireWriteAccess, async (req: AuthenticatedReq
   } catch (error) {
     console.error('Error testing endpoint:', error);
     res.status(500).json({ error: 'Failed to test endpoint' });
+  }
+});
+
+/**
+ * POST /admin/models/test-vl - Test VL (Vision-Language) capability
+ */
+adminModelsRoutes.post('/test-vl', requireWriteAccess, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { endpointUrl, apiKey, extraHeaders, modelName } = req.body as {
+      endpointUrl?: string;
+      apiKey?: string;
+      extraHeaders?: Record<string, string>;
+      modelName?: string;
+    };
+
+    if (!endpointUrl) {
+      res.status(400).json({ error: 'endpointUrl is required' });
+      return;
+    }
+
+    const result = await testVisionLanguage(endpointUrl, apiKey, extraHeaders, modelName);
+    res.json(result);
+  } catch (error) {
+    console.error('Error testing VL endpoint:', error);
+    res.status(500).json({ error: 'Failed to test VL endpoint' });
   }
 });
 

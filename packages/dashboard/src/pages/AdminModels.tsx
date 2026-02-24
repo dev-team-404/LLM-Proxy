@@ -17,6 +17,7 @@ import {
   RefreshCw,
   X,
   Server,
+  Eye,
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -172,11 +173,20 @@ function ModelDialog({
   const [headersError, setHeadersError] = useState('');
   const [testResults, setTestResults] = useState<{
     chatCompletion?: TestResult;
-    toolCall?: TestResult;
+    toolCallA?: TestResult;
+    toolCallB?: TestResult;
+    toolCallC?: TestResult;
+    toolCallD?: TestResult;
     allPassed?: boolean;
   } | null>(null);
   const [testing, setTesting] = useState(false);
   const [endpointChanged, setEndpointChanged] = useState(false);
+  const [vlTestResult, setVlTestResult] = useState<{
+    visionDescribe?: TestResult;
+    visionJudge?: TestResult;
+    passed?: boolean;
+  } | null>(null);
+  const [vlTesting, setVlTesting] = useState(false);
 
   // Track initial endpoint values for edit mode
   const [initialEndpoint, setInitialEndpoint] = useState('');
@@ -192,6 +202,8 @@ function ModelDialog({
       setInitialEndpoint(initialData.endpointUrl);
       setInitialApiKey(initialData.apiKey);
       setInitialHeaders(initialData.extraHeaders);
+      setVlTestResult(null);
+      setVlTesting(false);
     }
   }, [open, initialData]);
 
@@ -223,13 +235,35 @@ function ModelDialog({
       });
       setTestResults(result);
     } catch {
+      const fail: TestResult = { passed: false, latencyMs: 0, message: 'Test request failed' };
       setTestResults({
-        chatCompletion: { passed: false, latencyMs: 0, message: 'Test request failed' },
-        toolCall: { passed: false, latencyMs: 0, message: 'Test request failed' },
+        chatCompletion: fail, toolCallA: fail, toolCallB: fail, toolCallC: fail, toolCallD: fail,
         allPassed: false,
       });
     } finally {
       setTesting(false);
+    }
+  };
+
+  const runVLTest = async () => {
+    setVlTesting(true);
+    setVlTestResult(null);
+    try {
+      const result = await api.admin.models.testVL({
+        endpointUrl: form.endpointUrl,
+        modelName: form.upstreamModelName || form.name,
+        apiKey: form.apiKey || undefined,
+        extraHeaders: form.extraHeaders ? JSON.parse(form.extraHeaders) : undefined,
+      });
+      setVlTestResult(result);
+    } catch {
+      setVlTestResult({
+        visionDescribe: { passed: false, latencyMs: 0, message: 'VL test request failed' },
+        visionJudge: { passed: false, latencyMs: 0, message: 'VL test request failed' },
+        passed: false,
+      });
+    } finally {
+      setVlTesting(false);
     }
   };
 
@@ -390,15 +424,57 @@ function ModelDialog({
             {testResults && (
               <div className="space-y-2 bg-gray-50 rounded-lg p-3">
                 <TestResultDisplay label="Chat Completion" result={testResults.chatCompletion} />
-                <TestResultDisplay label="Tool Call" result={testResults.toolCall} />
+                <TestResultDisplay label="ToolCall-A (temp=0, required)" result={testResults.toolCallA} />
+                <TestResultDisplay label="ToolCall-B (temp=0, auto)" result={testResults.toolCallB} />
+                <TestResultDisplay label="ToolCall-C (default, required)" result={testResults.toolCallC} />
+                <TestResultDisplay label="ToolCall-D (default, auto)" result={testResults.toolCallD} />
               </div>
             )}
 
             {needsTest && !testPassed && (
               <p className="text-xs text-amber-600 flex items-center gap-1">
                 <AlertTriangle className="w-3.5 h-3.5" />
-                {isNew ? '새 모델 추가 시 모든 테스트를 통과해야 합니다.' : '엔드포인트 설정이 변경되었습니다. 재테스트가 필요합니다.'}
+                {isNew ? '새 모델 추가 시 모든 테스트(5건)를 통과해야 합니다.' : '엔드포인트 설정이 변경되었습니다. 재테스트가 필요합니다.'}
               </p>
+            )}
+          </div>
+
+          {/* VL (Vision-Language) Test Section */}
+          <div className="border-t pt-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-gray-700">
+                VL (Vision-Language) 테스트
+                <span className="ml-2 text-xs font-normal text-gray-400">(선택사항)</span>
+              </h4>
+              <button
+                type="button"
+                onClick={runVLTest}
+                disabled={vlTesting || !form.endpointUrl}
+                className="px-3 py-1.5 text-sm bg-purple-500 text-white rounded-lg hover:bg-purple-600 disabled:opacity-50 flex items-center gap-1.5 transition-colors"
+              >
+                {vlTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                VL 테스트
+              </button>
+            </div>
+
+            {vlTestResult && (
+              <div className="space-y-2 bg-purple-50 rounded-lg p-3">
+                <TestResultDisplay label="VL-Describe (이미지 설명)" result={vlTestResult.visionDescribe} />
+                <TestResultDisplay label="VL-Judge (설명 평가)" result={vlTestResult.visionJudge} />
+                <div className="flex items-center gap-2 text-sm pt-1 border-t border-purple-100">
+                  {vlTestResult.passed ? (
+                    <>
+                      <CheckCircle className="w-4 h-4 text-green-500" />
+                      <span className="text-green-600 font-medium">VL 테스트 통과</span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-4 h-4 text-red-500" />
+                      <span className="text-red-600 font-medium">VL 테스트 실패</span>
+                    </>
+                  )}
+                </div>
+              </div>
             )}
           </div>
 
@@ -442,40 +518,70 @@ function SubModelDialog({
   const [headersError, setHeadersError] = useState('');
   const [testResults, setTestResults] = useState<{
     chatCompletion?: TestResult;
-    toolCall?: TestResult;
+    toolCallA?: TestResult;
+    toolCallB?: TestResult;
+    toolCallC?: TestResult;
+    toolCallD?: TestResult;
     allPassed?: boolean;
   } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [vlTestResult, setVlTestResult] = useState<{
+    visionDescribe?: TestResult;
+    visionJudge?: TestResult;
+    passed?: boolean;
+  } | null>(null);
+  const [vlTesting, setVlTesting] = useState(false);
 
   useEffect(() => {
     if (open) {
       setForm(emptySubModelForm);
       setHeadersError('');
       setTestResults(null);
+      setVlTestResult(null);
+      setVlTesting(false);
     }
   }, [open]);
 
   if (!open) return null;
 
+  const getTestParams = () => ({
+    endpointUrl: form.endpointUrl,
+    modelName: form.modelName || parentModel.upstreamModelName || parentModel.name,
+    apiKey: form.apiKey || parentModel.apiKey || undefined,
+    extraHeaders: form.extraHeaders ? JSON.parse(form.extraHeaders) : parentModel.extraHeaders || undefined,
+  });
+
   const runTest = async () => {
     setTesting(true);
     setTestResults(null);
     try {
-      const result = await api.admin.models.test({
-        endpointUrl: form.endpointUrl,
-        modelName: form.modelName || parentModel.upstreamModelName || parentModel.name,
-        apiKey: form.apiKey || parentModel.apiKey || undefined,
-        extraHeaders: form.extraHeaders ? JSON.parse(form.extraHeaders) : parentModel.extraHeaders || undefined,
-      });
+      const result = await api.admin.models.test(getTestParams());
       setTestResults(result);
     } catch {
+      const fail: TestResult = { passed: false, latencyMs: 0, message: 'Test request failed' };
       setTestResults({
-        chatCompletion: { passed: false, latencyMs: 0, message: 'Test request failed' },
-        toolCall: { passed: false, latencyMs: 0, message: 'Test request failed' },
+        chatCompletion: fail, toolCallA: fail, toolCallB: fail, toolCallC: fail, toolCallD: fail,
         allPassed: false,
       });
     } finally {
       setTesting(false);
+    }
+  };
+
+  const runVLTest = async () => {
+    setVlTesting(true);
+    setVlTestResult(null);
+    try {
+      const result = await api.admin.models.testVL(getTestParams());
+      setVlTestResult(result);
+    } catch {
+      setVlTestResult({
+        visionDescribe: { passed: false, latencyMs: 0, message: 'VL test request failed' },
+        visionJudge: { passed: false, latencyMs: 0, message: 'VL test request failed' },
+        passed: false,
+      });
+    } finally {
+      setVlTesting(false);
     }
   };
 
@@ -605,15 +711,57 @@ function SubModelDialog({
             {testResults && (
               <div className="space-y-2 bg-gray-50 rounded-lg p-3">
                 <TestResultDisplay label="Chat Completion" result={testResults.chatCompletion} />
-                <TestResultDisplay label="Tool Call" result={testResults.toolCall} />
+                <TestResultDisplay label="ToolCall-A (temp=0, required)" result={testResults.toolCallA} />
+                <TestResultDisplay label="ToolCall-B (temp=0, auto)" result={testResults.toolCallB} />
+                <TestResultDisplay label="ToolCall-C (default, required)" result={testResults.toolCallC} />
+                <TestResultDisplay label="ToolCall-D (default, auto)" result={testResults.toolCallD} />
               </div>
             )}
 
             {!testPassed && (
               <p className="text-xs text-amber-600 flex items-center gap-1">
                 <AlertTriangle className="w-3.5 h-3.5" />
-                서브모델 추가 시 모든 테스트를 통과해야 합니다.
+                서브모델 추가 시 모든 테스트(5건)를 통과해야 합니다.
               </p>
+            )}
+          </div>
+
+          {/* VL (Vision-Language) Test Section */}
+          <div className="border-t pt-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-gray-700">
+                VL (Vision-Language) 테스트
+                <span className="ml-2 text-xs font-normal text-gray-400">(선택사항)</span>
+              </h4>
+              <button
+                type="button"
+                onClick={runVLTest}
+                disabled={vlTesting || !form.endpointUrl}
+                className="px-3 py-1.5 text-sm bg-purple-500 text-white rounded-lg hover:bg-purple-600 disabled:opacity-50 flex items-center gap-1.5 transition-colors"
+              >
+                {vlTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                VL 테스트
+              </button>
+            </div>
+
+            {vlTestResult && (
+              <div className="space-y-2 bg-purple-50 rounded-lg p-3">
+                <TestResultDisplay label="VL-Describe (이미지 설명)" result={vlTestResult.visionDescribe} />
+                <TestResultDisplay label="VL-Judge (설명 평가)" result={vlTestResult.visionJudge} />
+                <div className="flex items-center gap-2 text-sm pt-1 border-t border-purple-100">
+                  {vlTestResult.passed ? (
+                    <>
+                      <CheckCircle className="w-4 h-4 text-green-500" />
+                      <span className="text-green-600 font-medium">VL 테스트 통과</span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-4 h-4 text-red-500" />
+                      <span className="text-red-600 font-medium">VL 테스트 실패</span>
+                    </>
+                  )}
+                </div>
+              </div>
             )}
           </div>
 
@@ -769,11 +917,14 @@ export default function AdminModels() {
     onSuccess: (data) => {
       setTestingId(null);
       if (data.allPassed) {
-        alert('모든 테스트 통과!');
+        alert('모든 테스트 통과! (5/5)');
       } else {
         const msgs: string[] = [];
         if (!data.chatCompletion?.passed) msgs.push(`Chat: ${data.chatCompletion?.message}`);
-        if (!data.toolCall?.passed) msgs.push(`Tool: ${data.toolCall?.message}`);
+        if (!data.toolCallA?.passed) msgs.push(`ToolCall-A: ${data.toolCallA?.message}`);
+        if (!data.toolCallB?.passed) msgs.push(`ToolCall-B: ${data.toolCallB?.message}`);
+        if (!data.toolCallC?.passed) msgs.push(`ToolCall-C: ${data.toolCallC?.message}`);
+        if (!data.toolCallD?.passed) msgs.push(`ToolCall-D: ${data.toolCallD?.message}`);
         alert(`테스트 실패:\n${msgs.join('\n')}`);
       }
     },
