@@ -141,6 +141,7 @@ adminModelsRoutes.post('/', requireWriteAccess, async (req: AuthenticatedRequest
       endpointUrl,
       apiKey,
       extraHeaders,
+      extraBody,
       maxTokens,
       enabled,
     } = req.body as {
@@ -151,6 +152,7 @@ adminModelsRoutes.post('/', requireWriteAccess, async (req: AuthenticatedRequest
       endpointUrl?: string;
       apiKey?: string;
       extraHeaders?: Record<string, string>;
+      extraBody?: Record<string, any>;
       maxTokens?: number;
       enabled?: boolean;
     };
@@ -188,6 +190,7 @@ adminModelsRoutes.post('/', requireWriteAccess, async (req: AuthenticatedRequest
         endpointUrl,
         apiKey: apiKey || undefined,
         extraHeaders: extraHeaders || undefined,
+        extraBody: extraBody || undefined,
         maxTokens: maxTokens ?? 128000,
         enabled: enabled ?? true,
         sortOrder: nextSortOrder,
@@ -268,6 +271,7 @@ adminModelsRoutes.put('/:id', requireWriteAccess, async (req: AuthenticatedReque
       endpointUrl,
       apiKey,
       extraHeaders,
+      extraBody,
       maxTokens,
       enabled,
     } = req.body as {
@@ -278,6 +282,7 @@ adminModelsRoutes.put('/:id', requireWriteAccess, async (req: AuthenticatedReque
       endpointUrl?: string;
       apiKey?: string | null;
       extraHeaders?: Record<string, string> | null;
+      extraBody?: Record<string, any> | null;
       maxTokens?: number;
       enabled?: boolean;
     };
@@ -316,6 +321,7 @@ adminModelsRoutes.put('/:id', requireWriteAccess, async (req: AuthenticatedReque
     if (endpointUrl !== undefined) data.endpointUrl = endpointUrl;
     if (apiKey !== undefined) data.apiKey = apiKey || null;
     if (extraHeaders !== undefined) data.extraHeaders = extraHeaders;
+    if (extraBody !== undefined) data.extraBody = extraBody;
     if (maxTokens !== undefined) data.maxTokens = maxTokens;
     if (enabled !== undefined) data.enabled = enabled;
 
@@ -466,11 +472,12 @@ adminModelsRoutes.get('/:modelId/sub-models', async (req: AuthenticatedRequest, 
 adminModelsRoutes.post('/:modelId/sub-models', requireWriteAccess, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { modelId } = req.params;
-    const { modelName, endpointUrl, apiKey, extraHeaders, enabled, sortOrder } = req.body as {
+    const { modelName, endpointUrl, apiKey, extraHeaders, extraBody, enabled, sortOrder } = req.body as {
       modelName?: string;
       endpointUrl?: string;
       apiKey?: string;
       extraHeaders?: Record<string, string>;
+      extraBody?: Record<string, any>;
       enabled?: boolean;
       sortOrder?: number;
     };
@@ -504,6 +511,7 @@ adminModelsRoutes.post('/:modelId/sub-models', requireWriteAccess, async (req: A
         endpointUrl,
         apiKey: apiKey || undefined,
         extraHeaders: extraHeaders || undefined,
+        extraBody: extraBody || undefined,
         enabled: enabled ?? true,
         sortOrder: finalSortOrder,
       },
@@ -534,11 +542,12 @@ adminModelsRoutes.post('/:modelId/sub-models', requireWriteAccess, async (req: A
 adminModelsRoutes.put('/:modelId/sub-models/:subId', requireWriteAccess, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { modelId, subId } = req.params;
-    const { modelName, endpointUrl, apiKey, extraHeaders, enabled, sortOrder } = req.body as {
+    const { modelName, endpointUrl, apiKey, extraHeaders, extraBody, enabled, sortOrder } = req.body as {
       modelName?: string | null;
       endpointUrl?: string;
       apiKey?: string | null;
       extraHeaders?: Record<string, string> | null;
+      extraBody?: Record<string, any> | null;
       enabled?: boolean;
       sortOrder?: number;
     };
@@ -556,6 +565,7 @@ adminModelsRoutes.put('/:modelId/sub-models/:subId', requireWriteAccess, async (
     if (endpointUrl !== undefined) data.endpointUrl = endpointUrl;
     if (apiKey !== undefined) data.apiKey = apiKey || null;
     if (extraHeaders !== undefined) data.extraHeaders = extraHeaders;
+    if (extraBody !== undefined) data.extraBody = extraBody;
     if (enabled !== undefined) data.enabled = enabled;
     if (sortOrder !== undefined) data.sortOrder = sortOrder;
 

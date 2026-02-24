@@ -33,6 +33,7 @@ interface EndpointInfo {
   apiKey: string | null;
   modelName: string;
   extraHeaders: Record<string, string> | null;
+  extraBody: Record<string, any> | null;
 }
 
 // ============================================
@@ -59,7 +60,7 @@ async function getModelEndpoints(modelId: string, parentEndpoint: EndpointInfo):
   const subModels = await prisma.subModel.findMany({
     where: { parentId: modelId, enabled: true },
     orderBy: { sortOrder: 'asc' },
-    select: { endpointUrl: true, apiKey: true, modelName: true, extraHeaders: true },
+    select: { endpointUrl: true, apiKey: true, modelName: true, extraHeaders: true, extraBody: true },
   });
 
   if (subModels.length === 0) {
@@ -73,6 +74,7 @@ async function getModelEndpoints(modelId: string, parentEndpoint: EndpointInfo):
       apiKey: s.apiKey,
       modelName: s.modelName || parentEndpoint.modelName,
       extraHeaders: s.extraHeaders as Record<string, string> | null,
+      extraBody: s.extraBody as Record<string, any> | null,
     })),
   ];
 }
@@ -764,6 +766,7 @@ proxyRoutes.post('/chat/completions', authenticateApiToken, checkRateLimit, asyn
       apiKey: model.apiKey,
       modelName: model.upstreamModelName || model.name,
       extraHeaders: model.extraHeaders as Record<string, string> | null,
+      extraBody: model.extraBody as Record<string, any> | null,
     });
     const startIdx = await getRoundRobinIndex(model.id, endpoints.length);
 
@@ -788,10 +791,12 @@ proxyRoutes.post('/chat/completions', authenticateApiToken, checkRateLimit, asyn
         console.log(`[Failover] Model "${model.name}" trying endpoint ${attempt + 1}/${endpoints.length}: ${endpoint.endpointUrl}`);
       }
 
+      // Merge: extraBody defaults (model config) → then client otherParams override
       const llmRequestBody = {
         model: endpoint.modelName,
         messages,
         stream: stream || false,
+        ...(endpoint.extraBody || {}),
         ...otherParams,
       };
 
@@ -972,6 +977,7 @@ proxyRoutes.post('/embeddings', authenticateApiToken, checkRateLimit, async (req
       apiKey: model.apiKey,
       modelName: model.upstreamModelName || model.name,
       extraHeaders: model.extraHeaders as Record<string, string> | null,
+      extraBody: model.extraBody as Record<string, any> | null,
     });
     const startIdx = await getRoundRobinIndex(model.id, endpoints.length);
 
@@ -1243,6 +1249,7 @@ proxyRoutes.post('/rerank', authenticateApiToken, checkRateLimit, async (req: To
       apiKey: model.apiKey,
       modelName: model.upstreamModelName || model.name,
       extraHeaders: model.extraHeaders as Record<string, string> | null,
+      extraBody: model.extraBody as Record<string, any> | null,
     };
 
     const endpoints = await getModelEndpoints(model.id, parentEndpoint);

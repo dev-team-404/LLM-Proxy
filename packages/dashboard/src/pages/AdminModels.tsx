@@ -32,6 +32,7 @@ interface SubModel {
   endpointUrl: string;
   apiKey?: string;
   extraHeaders?: Record<string, string>;
+  extraBody?: Record<string, any>;
   sortOrder: number;
   enabled: boolean;
 }
@@ -45,6 +46,7 @@ interface Model {
   endpointUrl: string;
   apiKey?: string;
   extraHeaders?: Record<string, string>;
+  extraBody?: Record<string, any>;
   maxTokens?: number;
   enabled: boolean;
   isHealthy?: boolean;
@@ -59,6 +61,7 @@ interface ModelFormData {
   endpointUrl: string;
   apiKey: string;
   extraHeaders: string;
+  extraBody: string;
   maxTokens: string;
   enabled: boolean;
 }
@@ -68,6 +71,7 @@ interface SubModelFormData {
   endpointUrl: string;
   apiKey: string;
   extraHeaders: string;
+  extraBody: string;
   enabled: boolean;
   sortOrder: string;
 }
@@ -80,6 +84,7 @@ const emptyForm: ModelFormData = {
   endpointUrl: '',
   apiKey: '',
   extraHeaders: '{}',
+  extraBody: '{}',
   maxTokens: '',
   enabled: true,
 };
@@ -89,6 +94,7 @@ const emptySubModelForm: SubModelFormData = {
   endpointUrl: '',
   apiKey: '',
   extraHeaders: '{}',
+  extraBody: '{}',
   enabled: true,
   sortOrder: '0',
 };
@@ -203,6 +209,9 @@ function ModelDialog({
       if (form.extraHeaders.trim()) {
         JSON.parse(form.extraHeaders);
       }
+      if (form.extraBody.trim()) {
+        JSON.parse(form.extraBody);
+      }
       setHeadersError('');
       onSubmit(form);
     } catch {
@@ -295,6 +304,17 @@ function ModelDialog({
               placeholder='{"X-Custom-Header": "value"}'
             />
             {headersError && <p className="text-red-500 text-xs mt-1">{headersError}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">추가 Body 파라미터 (JSON)</label>
+            <textarea
+              value={form.extraBody}
+              onChange={(e) => setForm({ ...form, extraBody: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none font-mono text-sm"
+              rows={3}
+              placeholder='{"chat_template_kwargs": {"thinking": true}}'
+            />
+            <p className="mt-1 text-xs text-gray-400">요청 body에 기본으로 포함될 파라미터. 클라이언트가 동일 키를 보내면 클라이언트 값이 우선</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">최대 토큰</label>
@@ -432,6 +452,9 @@ function SubModelDialog({
       if (form.extraHeaders.trim()) {
         JSON.parse(form.extraHeaders);
       }
+      if (form.extraBody.trim()) {
+        JSON.parse(form.extraBody);
+      }
       setHeadersError('');
       onSubmit(form);
     } catch {
@@ -494,6 +517,16 @@ function SubModelDialog({
               placeholder='{"X-Custom-Header": "value"}'
             />
             {headersError && <p className="text-red-500 text-xs mt-1">{headersError}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">추가 Body 파라미터 (JSON)</label>
+            <textarea
+              value={form.extraBody}
+              onChange={(e) => setForm({ ...form, extraBody: e.target.value })}
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none font-mono text-sm"
+              rows={2}
+              placeholder='{"chat_template_kwargs": {"thinking": true}}'
+            />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -640,6 +673,7 @@ export default function AdminModels() {
         endpointUrl: formData.endpointUrl,
         apiKey: formData.apiKey || undefined,
         extraHeaders: formData.extraHeaders ? JSON.parse(formData.extraHeaders) : undefined,
+        extraBody: formData.extraBody ? JSON.parse(formData.extraBody) : undefined,
         maxTokens: formData.maxTokens ? parseInt(formData.maxTokens) : undefined,
         enabled: formData.enabled,
       }),
@@ -660,6 +694,7 @@ export default function AdminModels() {
         endpointUrl: formData.endpointUrl,
         apiKey: formData.apiKey || null,
         extraHeaders: formData.extraHeaders ? JSON.parse(formData.extraHeaders) : undefined,
+        extraBody: formData.extraBody ? JSON.parse(formData.extraBody) : undefined,
         maxTokens: formData.maxTokens ? parseInt(formData.maxTokens) : undefined,
         enabled: formData.enabled,
       }),
@@ -717,6 +752,7 @@ export default function AdminModels() {
         endpointUrl: data.endpointUrl,
         apiKey: data.apiKey || undefined,
         extraHeaders: data.extraHeaders ? JSON.parse(data.extraHeaders) : undefined,
+        extraBody: data.extraBody ? JSON.parse(data.extraBody) : undefined,
         enabled: data.enabled,
         sortOrder: data.sortOrder ? parseInt(data.sortOrder) : undefined,
       }),
@@ -839,6 +875,7 @@ export default function AdminModels() {
             endpointUrl: editModel.endpointUrl,
             apiKey: editModel.apiKey || '',
             extraHeaders: editModel.extraHeaders ? JSON.stringify(editModel.extraHeaders, null, 2) : '{}',
+            extraBody: editModel.extraBody ? JSON.stringify(editModel.extraBody, null, 2) : '{}',
             maxTokens: editModel.maxTokens?.toString() || '',
             enabled: editModel.enabled,
           }}
