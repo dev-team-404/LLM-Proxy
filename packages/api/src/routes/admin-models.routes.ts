@@ -12,6 +12,8 @@ interface TestResult {
   latencyMs: number;
   message: string;
   statusCode?: number;
+  request?: Record<string, unknown>;
+  response?: Record<string, unknown> | string;
 }
 
 function normalizeChatCompletionsUrl(endpointUrl: string): string {
@@ -33,7 +35,24 @@ async function runSingleTest(
   const model = body.model || 'unknown';
   const start = Date.now();
 
+  // Sanitize request body for logging (mask API key)
+  const logBody = { ...body };
   console.log(`[EndpointTest] ${testName} 시작 | model=${model} | url=${url}`);
+  console.log(`[EndpointTest] ${testName} Request Body:`, JSON.stringify(logBody, null, 2));
+
+  const fail = (latencyMs: number, message: string, extra?: { statusCode?: number; responseBody?: any }) => {
+    const result: TestResult = {
+      passed: false, latencyMs, message,
+      statusCode: extra?.statusCode,
+      request: logBody,
+      response: extra?.responseBody,
+    };
+    console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${message}`);
+    if (extra?.responseBody) {
+      console.error(`[EndpointTest] ${testName} Response Body:`, typeof extra.responseBody === 'string' ? extra.responseBody : JSON.stringify(extra.responseBody, null, 2));
+    }
+    return result;
+  };
 
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -52,68 +71,59 @@ async function runSingleTest(
 
     clearTimeout(timeout);
     const latencyMs = Date.now() - start;
+    const rawText = await response.text().catch(() => '');
+
+    // Try parse JSON
+    let responseBody: Record<string, any> | null = null;
+    try { responseBody = JSON.parse(rawText); } catch { /* keep null */ }
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => 'No response body');
-      const msg = `HTTP ${response.status}: ${errorText.substring(0, 300)}`;
-      console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
-      return { passed: false, latencyMs, message: msg, statusCode: response.status };
+      return fail(latencyMs, `HTTP ${response.status}: ${rawText.substring(0, 500)}`, { statusCode: response.status, responseBody: responseBody || rawText.substring(0, 1000) });
     }
 
     if (validateToolCall) {
-      const responseBody = await response.json().catch(() => null) as Record<string, any> | null;
       if (!responseBody) {
-        const msg = 'Failed to parse response JSON';
-        console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
-        return { passed: false, latencyMs, message: msg, statusCode: response.status };
+        return fail(latencyMs, 'Failed to parse response JSON', { statusCode: response.status, responseBody: rawText.substring(0, 1000) });
       }
 
       const choice = responseBody.choices?.[0];
       if (!choice) {
-        const msg = `No choices in response | body=${JSON.stringify(responseBody).substring(0, 500)}`;
-        console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
-        return { passed: false, latencyMs, message: 'No choices in response', statusCode: response.status };
+        return fail(latencyMs, 'No choices in response', { statusCode: response.status, responseBody });
       }
 
       const toolCalls = choice.message?.tool_calls;
       if (!toolCalls || !Array.isArray(toolCalls) || toolCalls.length === 0) {
         const content = choice.message?.content || '';
         if (content.includes('<tool_call>') || content.includes('<function')) {
-          const msg = `XML-style tool calls detected in content | content=${content.substring(0, 300)}`;
-          console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
-          return { passed: false, latencyMs, message: 'Model returns XML-style tool calls instead of OpenAI-compatible tool_calls format', statusCode: response.status };
+          return fail(latencyMs, 'Model returns XML-style tool calls instead of OpenAI-compatible tool_calls format', { statusCode: response.status, responseBody });
         }
-        const msg = `No tool_calls field | finish_reason=${choice.finish_reason} | content=${content.substring(0, 300)}`;
-        console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
-        return { passed: false, latencyMs, message: 'No tool_calls in response. Model may not support function calling', statusCode: response.status };
+        return fail(latencyMs, `No tool_calls in response (finish_reason=${choice.finish_reason}). Model may not support function calling`, { statusCode: response.status, responseBody });
       }
 
       const tc = toolCalls[0];
       if (!tc.function?.name || typeof tc.function.arguments !== 'string') {
-        const msg = `Invalid tool_call structure | tool_call=${JSON.stringify(tc).substring(0, 300)}`;
-        console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
-        return { passed: false, latencyMs, message: 'Invalid tool_call structure: missing function.name or function.arguments', statusCode: response.status };
+        return fail(latencyMs, 'Invalid tool_call structure: missing function.name or function.arguments', { statusCode: response.status, responseBody });
       }
 
       try {
         JSON.parse(tc.function.arguments);
       } catch {
-        const msg = `Invalid JSON in arguments | arguments=${tc.function.arguments.substring(0, 300)}`;
-        console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
-        return { passed: false, latencyMs, message: `tool_call arguments is not valid JSON: ${tc.function.arguments.substring(0, 200)}`, statusCode: response.status };
+        return fail(latencyMs, `tool_call arguments is not valid JSON: ${tc.function.arguments.substring(0, 200)}`, { statusCode: response.status, responseBody });
       }
 
-      console.log(`[EndpointTest] ${testName} PASS | model=${model} | ${latencyMs}ms | function=${tc.function.name} args=${tc.function.arguments.substring(0, 100)}`);
-    } else {
-      console.log(`[EndpointTest] ${testName} PASS | model=${model} | ${latencyMs}ms`);
+      console.log(`[EndpointTest] ${testName} PASS | model=${model} | ${latencyMs}ms | function=${tc.function.name} args=${tc.function.arguments}`);
+      console.log(`[EndpointTest] ${testName} Response Body:`, JSON.stringify(responseBody, null, 2));
+      return { passed: true, latencyMs, message: 'OK', statusCode: response.status, request: logBody, response: responseBody };
     }
 
-    return { passed: true, latencyMs, message: 'OK', statusCode: response.status };
+    console.log(`[EndpointTest] ${testName} PASS | model=${model} | ${latencyMs}ms`);
+    console.log(`[EndpointTest] ${testName} Response Body:`, rawText.substring(0, 500));
+    return { passed: true, latencyMs, message: 'OK', statusCode: response.status, request: logBody, response: responseBody || rawText.substring(0, 500) };
   } catch (error) {
     const latencyMs = Date.now() - start;
     const msg = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[EndpointTest] ${testName} ERROR | model=${model} | ${latencyMs}ms | ${msg}`);
-    return { passed: false, latencyMs, message: msg };
+    return { passed: false, latencyMs, message: msg, request: logBody };
   }
 }
 
@@ -143,7 +153,7 @@ async function testEndpointHealth(
       type: 'function',
       function: {
         name: 'get_weather',
-        description: 'Get current weather',
+        description: 'Get current weather for a given city',
         parameters: {
           type: 'object',
           properties: { location: { type: 'string', description: 'City name' } },
@@ -151,6 +161,8 @@ async function testEndpointHealth(
         },
       },
     }],
+    tool_choice: 'required',
+    temperature: 0,
     stream: false,
   };
 

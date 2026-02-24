@@ -24,6 +24,8 @@ interface TestResult {
   passed: boolean;
   latencyMs: number;
   message: string;
+  request?: Record<string, unknown>;
+  response?: Record<string, unknown> | string;
 }
 
 interface SubModel {
@@ -100,18 +102,51 @@ const emptySubModelForm: SubModelFormData = {
 };
 
 function TestResultDisplay({ label, result }: { label: string; result?: TestResult }) {
+  const [expanded, setExpanded] = useState(false);
   if (!result) return null;
+  const hasDetail = result.request || result.response;
   return (
-    <div className="flex items-center gap-2 text-sm">
-      {result.passed ? (
-        <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
-      ) : (
-        <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+    <div className="space-y-1">
+      <div className="flex items-center gap-2 text-sm">
+        {result.passed ? (
+          <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
+        ) : (
+          <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+        )}
+        <span className="font-medium text-gray-700">{label}:</span>
+        <span className={result.passed ? 'text-green-600' : 'text-red-600'}>
+          {result.passed ? `통과 (${result.latencyMs}ms)` : result.message.substring(0, 150)}
+        </span>
+        {hasDetail && (
+          <button
+            type="button"
+            onClick={() => setExpanded(!expanded)}
+            className="ml-auto text-xs text-blue-500 hover:text-blue-700 flex-shrink-0"
+          >
+            {expanded ? '접기' : '상세'}
+          </button>
+        )}
+      </div>
+      {expanded && hasDetail && (
+        <div className="ml-6 space-y-2">
+          {result.request && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 mb-0.5">Request Body</p>
+              <pre className="text-xs bg-gray-100 rounded p-2 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
+                {JSON.stringify(result.request, null, 2)}
+              </pre>
+            </div>
+          )}
+          {result.response && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 mb-0.5">Response Body</p>
+              <pre className="text-xs bg-gray-100 rounded p-2 overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap break-all">
+                {typeof result.response === 'string' ? result.response : JSON.stringify(result.response, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
       )}
-      <span className="font-medium text-gray-700">{label}:</span>
-      <span className={result.passed ? 'text-green-600' : 'text-red-600'}>
-        {result.passed ? `통과 (${result.latencyMs}ms)` : result.message.substring(0, 100)}
-      </span>
     </div>
   );
 }
