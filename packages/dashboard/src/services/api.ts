@@ -92,8 +92,8 @@ export const admin = {
     update: (id: string, data: Record<string, unknown>) =>
       api.put(`/admin/models/${id}`, data).then((r) => r.data),
 
-    delete: (id: string) =>
-      api.delete(`/admin/models/${id}`).then((r) => r.data),
+    delete: (id: string, force?: boolean) =>
+      api.delete(`/admin/models/${id}${force ? '?force=true' : ''}`).then((r) => r.data),
 
     reorder: (modelIds: string[]) =>
       api.put('/admin/models/reorder', { modelIds }).then((r) => r.data),

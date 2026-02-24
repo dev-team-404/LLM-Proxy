@@ -706,11 +706,21 @@ export default function AdminModels() {
   });
 
   const deleteMut = useMutation({
-    mutationFn: (id: string) => api.admin.models.delete(id),
+    mutationFn: ({ id, force }: { id: string; force?: boolean }) => api.admin.models.delete(id, force),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'models'] });
     },
-    onError: () => alert('모델 삭제에 실패했습니다.'),
+    onError: (error: any, variables) => {
+      const data = error?.response?.data;
+      if (data?.usageLogs !== undefined && !variables.force) {
+        const msg = `이 모델에 사용 로그가 ${data.usageLogs}건 있습니다.\n그래도 삭제하시겠습니까?`;
+        if (confirm(msg)) {
+          deleteMut.mutate({ id: variables.id, force: true });
+        }
+      } else {
+        alert('모델 삭제에 실패했습니다.');
+      }
+    },
   });
 
   const testMut = useMutation({
@@ -834,7 +844,7 @@ export default function AdminModels() {
                     onToggleExpand={(id) => setExpandedModel(expandedModel === id ? null : id)}
                     onEdit={(m) => setEditModel(m)}
                     onDelete={(id) => {
-                      if (confirm('이 모델을 삭제하시겠습니까?')) deleteMut.mutate(id);
+                      if (confirm('이 모델을 삭제하시겠습니까?')) deleteMut.mutate({ id });
                     }}
                     onTest={(m) => {
                       setTestingId(m.id);
