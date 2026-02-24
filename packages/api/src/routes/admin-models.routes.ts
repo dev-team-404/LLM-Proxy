@@ -22,6 +22,7 @@ function normalizeChatCompletionsUrl(endpointUrl: string): string {
 }
 
 async function runSingleTest(
+  testName: string,
   endpointUrl: string,
   apiKey: string | null | undefined,
   extraHeaders: Record<string, string> | null | undefined,
@@ -29,7 +30,11 @@ async function runSingleTest(
   validateToolCall = false
 ): Promise<TestResult> {
   const url = normalizeChatCompletionsUrl(endpointUrl);
+  const model = body.model || 'unknown';
   const start = Date.now();
+
+  console.log(`[EndpointTest] ${testName} 시작 | model=${model} | url=${url}`);
+
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
@@ -50,48 +55,65 @@ async function runSingleTest(
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'No response body');
-      return { passed: false, latencyMs, message: `HTTP ${response.status}: ${errorText.substring(0, 300)}`, statusCode: response.status };
+      const msg = `HTTP ${response.status}: ${errorText.substring(0, 300)}`;
+      console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
+      return { passed: false, latencyMs, message: msg, statusCode: response.status };
     }
 
     if (validateToolCall) {
       const responseBody = await response.json().catch(() => null) as Record<string, any> | null;
       if (!responseBody) {
-        return { passed: false, latencyMs, message: 'Failed to parse response JSON', statusCode: response.status };
+        const msg = 'Failed to parse response JSON';
+        console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
+        return { passed: false, latencyMs, message: msg, statusCode: response.status };
       }
 
       const choice = responseBody.choices?.[0];
       if (!choice) {
+        const msg = `No choices in response | body=${JSON.stringify(responseBody).substring(0, 500)}`;
+        console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
         return { passed: false, latencyMs, message: 'No choices in response', statusCode: response.status };
       }
 
       const toolCalls = choice.message?.tool_calls;
       if (!toolCalls || !Array.isArray(toolCalls) || toolCalls.length === 0) {
-        // Check if model returned XML-style tool calls in content instead
         const content = choice.message?.content || '';
         if (content.includes('<tool_call>') || content.includes('<function')) {
+          const msg = `XML-style tool calls detected in content | content=${content.substring(0, 300)}`;
+          console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
           return { passed: false, latencyMs, message: 'Model returns XML-style tool calls instead of OpenAI-compatible tool_calls format', statusCode: response.status };
         }
+        const msg = `No tool_calls field | finish_reason=${choice.finish_reason} | content=${content.substring(0, 300)}`;
+        console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
         return { passed: false, latencyMs, message: 'No tool_calls in response. Model may not support function calling', statusCode: response.status };
       }
 
-      // Validate tool call structure
       const tc = toolCalls[0];
       if (!tc.function?.name || typeof tc.function.arguments !== 'string') {
-        return { passed: false, latencyMs, message: `Invalid tool_call structure: missing function.name or function.arguments`, statusCode: response.status };
+        const msg = `Invalid tool_call structure | tool_call=${JSON.stringify(tc).substring(0, 300)}`;
+        console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
+        return { passed: false, latencyMs, message: 'Invalid tool_call structure: missing function.name or function.arguments', statusCode: response.status };
       }
 
-      // Validate arguments is valid JSON
       try {
         JSON.parse(tc.function.arguments);
       } catch {
+        const msg = `Invalid JSON in arguments | arguments=${tc.function.arguments.substring(0, 300)}`;
+        console.error(`[EndpointTest] ${testName} FAIL | model=${model} | ${latencyMs}ms | ${msg}`);
         return { passed: false, latencyMs, message: `tool_call arguments is not valid JSON: ${tc.function.arguments.substring(0, 200)}`, statusCode: response.status };
       }
+
+      console.log(`[EndpointTest] ${testName} PASS | model=${model} | ${latencyMs}ms | function=${tc.function.name} args=${tc.function.arguments.substring(0, 100)}`);
+    } else {
+      console.log(`[EndpointTest] ${testName} PASS | model=${model} | ${latencyMs}ms`);
     }
 
     return { passed: true, latencyMs, message: 'OK', statusCode: response.status };
   } catch (error) {
     const latencyMs = Date.now() - start;
-    return { passed: false, latencyMs, message: error instanceof Error ? error.message : 'Unknown error' };
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[EndpointTest] ${testName} ERROR | model=${model} | ${latencyMs}ms | ${msg}`);
+    return { passed: false, latencyMs, message: msg };
   }
 }
 
@@ -132,12 +154,17 @@ async function testEndpointHealth(
     stream: false,
   };
 
+  console.log(`[EndpointTest] ========== 테스트 시작 | model=${model} | endpoint=${endpointUrl} ==========`);
+
   const [chatCompletion, toolCall] = await Promise.all([
-    runSingleTest(endpointUrl, apiKey, extraHeaders, chatBody),
-    runSingleTest(endpointUrl, apiKey, extraHeaders, toolBody, true),
+    runSingleTest('ChatCompletion', endpointUrl, apiKey, extraHeaders, chatBody),
+    runSingleTest('ToolCall', endpointUrl, apiKey, extraHeaders, toolBody, true),
   ]);
 
-  return { chatCompletion, toolCall, allPassed: chatCompletion.passed && toolCall.passed };
+  const allPassed = chatCompletion.passed && toolCall.passed;
+  console.log(`[EndpointTest] ========== 테스트 완료 | model=${model} | chat=${chatCompletion.passed ? 'PASS' : 'FAIL'} | tool=${toolCall.passed ? 'PASS' : 'FAIL'} | result=${allPassed ? 'ALL PASS' : 'FAIL'} ==========`);
+
+  return { chatCompletion, toolCall, allPassed };
 }
 
 // ============================================
