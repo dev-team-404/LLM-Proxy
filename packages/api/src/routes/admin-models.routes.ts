@@ -25,7 +25,8 @@ async function runSingleTest(
   endpointUrl: string,
   apiKey: string | null | undefined,
   extraHeaders: Record<string, string> | null | undefined,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  validateToolCall = false
 ): Promise<TestResult> {
   const url = normalizeChatCompletionsUrl(endpointUrl);
   const start = Date.now();
@@ -35,7 +36,7 @@ async function runSingleTest(
     if (extraHeaders) Object.assign(headers, extraHeaders);
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+    const timeout = setTimeout(() => controller.abort(), 60000);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -50,6 +51,41 @@ async function runSingleTest(
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'No response body');
       return { passed: false, latencyMs, message: `HTTP ${response.status}: ${errorText.substring(0, 300)}`, statusCode: response.status };
+    }
+
+    if (validateToolCall) {
+      const responseBody = await response.json().catch(() => null) as Record<string, any> | null;
+      if (!responseBody) {
+        return { passed: false, latencyMs, message: 'Failed to parse response JSON', statusCode: response.status };
+      }
+
+      const choice = responseBody.choices?.[0];
+      if (!choice) {
+        return { passed: false, latencyMs, message: 'No choices in response', statusCode: response.status };
+      }
+
+      const toolCalls = choice.message?.tool_calls;
+      if (!toolCalls || !Array.isArray(toolCalls) || toolCalls.length === 0) {
+        // Check if model returned XML-style tool calls in content instead
+        const content = choice.message?.content || '';
+        if (content.includes('<tool_call>') || content.includes('<function')) {
+          return { passed: false, latencyMs, message: 'Model returns XML-style tool calls instead of OpenAI-compatible tool_calls format', statusCode: response.status };
+        }
+        return { passed: false, latencyMs, message: 'No tool_calls in response. Model may not support function calling', statusCode: response.status };
+      }
+
+      // Validate tool call structure
+      const tc = toolCalls[0];
+      if (!tc.function?.name || typeof tc.function.arguments !== 'string') {
+        return { passed: false, latencyMs, message: `Invalid tool_call structure: missing function.name or function.arguments`, statusCode: response.status };
+      }
+
+      // Validate arguments is valid JSON
+      try {
+        JSON.parse(tc.function.arguments);
+      } catch {
+        return { passed: false, latencyMs, message: `tool_call arguments is not valid JSON: ${tc.function.arguments.substring(0, 200)}`, statusCode: response.status };
+      }
     }
 
     return { passed: true, latencyMs, message: 'OK', statusCode: response.status };
@@ -93,13 +129,12 @@ async function testEndpointHealth(
         },
       },
     }],
-    max_tokens: 50,
     stream: false,
   };
 
   const [chatCompletion, toolCall] = await Promise.all([
     runSingleTest(endpointUrl, apiKey, extraHeaders, chatBody),
-    runSingleTest(endpointUrl, apiKey, extraHeaders, toolBody),
+    runSingleTest(endpointUrl, apiKey, extraHeaders, toolBody, true),
   ]);
 
   return { chatCompletion, toolCall, allPassed: chatCompletion.passed && toolCall.passed };
