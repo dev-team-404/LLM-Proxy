@@ -165,7 +165,6 @@ async function testEndpointHealth(
   const chatBody = {
     model,
     messages: [{ role: 'user', content: 'Hello' }],
-    max_tokens: 5,
     stream: false,
   };
 
@@ -244,7 +243,6 @@ async function testVisionLanguage(
         { type: 'image_url', image_url: { url: `data:image/png;base64,${vlTestImageBase64}` } },
       ],
     }],
-    max_tokens: 1024,
     stream: false,
   };
 
@@ -291,7 +289,6 @@ Key elements to check:
 
 If the description captures at least 3 of these 4 elements, respond with exactly "PASS". Otherwise respond with exactly "FAIL" followed by a brief explanation.`,
     }],
-    max_tokens: 256,
     temperature: 0,
     stream: false,
   };
