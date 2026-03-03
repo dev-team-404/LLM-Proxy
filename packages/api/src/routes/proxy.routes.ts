@@ -1065,15 +1065,21 @@ proxyRoutes.post('/embeddings', authenticateApiToken, checkRateLimit, async (req
           continue;
         }
 
-        // Success
-        const data = await response.json() as {
-          usage?: { prompt_tokens?: number; total_tokens?: number };
-          [key: string]: unknown;
-        };
+        // Success — stream response through without full JSON parse/serialize cycle
+        // to avoid doubling memory usage on large embedding responses
+        const responseText = await response.text();
 
         await recordEndpointSuccess(endpoint.endpointUrl);
 
-        const inputTokens = data.usage?.prompt_tokens || data.usage?.total_tokens || 0;
+        // Extract usage via regex (avoids full JSON parse of potentially huge response)
+        let inputTokens = 0;
+        const promptMatch = responseText.match(/"prompt_tokens"\s*:\s*(\d+)/);
+        if (promptMatch) {
+          inputTokens = parseInt(promptMatch[1]!, 10);
+        } else {
+          const totalMatch = responseText.match(/"total_tokens"\s*:\s*(\d+)/);
+          if (totalMatch) inputTokens = parseInt(totalMatch[1]!, 10);
+        }
 
         // Record usage
         if (inputTokens > 0) {
@@ -1092,7 +1098,7 @@ proxyRoutes.post('/embeddings', authenticateApiToken, checkRateLimit, async (req
           });
         }
 
-        // Log request
+        // Log request (don't store huge embedding response body)
         logRequest({
           apiTokenId: req.apiTokenId || null,
           userId: req.userId || null,
@@ -1102,7 +1108,7 @@ proxyRoutes.post('/embeddings', authenticateApiToken, checkRateLimit, async (req
           path: '/v1/embeddings',
           statusCode: 200,
           requestBody: req.body,
-          responseBody: data,
+          responseBody: null,
           inputTokens,
           outputTokens: 0,
           latencyMs,
@@ -1112,7 +1118,9 @@ proxyRoutes.post('/embeddings', authenticateApiToken, checkRateLimit, async (req
           stream: false,
         }).catch(() => {});
 
-        res.json(data);
+        // Forward raw text directly — no JSON.parse() + JSON.stringify() cycle
+        res.setHeader('Content-Type', 'application/json');
+        res.status(200).send(responseText);
         return;
 
       } catch (error) {
@@ -1352,15 +1360,20 @@ proxyRoutes.post('/rerank', authenticateApiToken, checkRateLimit, async (req: To
           continue;
         }
 
-        // ---- Success ----
-        const data = await response.json() as {
-          usage?: { total_tokens?: number; prompt_tokens?: number };
-          [key: string]: unknown;
-        };
+        // ---- Success — stream response through without full JSON parse/serialize ----
+        const responseText = await response.text();
 
         await recordEndpointSuccess(endpoint.endpointUrl);
 
-        const inputTokens = data.usage?.prompt_tokens || data.usage?.total_tokens || 0;
+        // Extract usage via regex (avoids full JSON parse)
+        let inputTokens = 0;
+        const promptMatch = responseText.match(/"prompt_tokens"\s*:\s*(\d+)/);
+        if (promptMatch) {
+          inputTokens = parseInt(promptMatch[1]!, 10);
+        } else {
+          const totalMatch = responseText.match(/"total_tokens"\s*:\s*(\d+)/);
+          if (totalMatch) inputTokens = parseInt(totalMatch[1]!, 10);
+        }
 
         // Record usage (rerank has no output tokens)
         if (inputTokens > 0) {
@@ -1379,7 +1392,7 @@ proxyRoutes.post('/rerank', authenticateApiToken, checkRateLimit, async (req: To
           });
         }
 
-        // Log request
+        // Log request (don't store response body)
         logRequest({
           apiTokenId: req.apiTokenId || null,
           userId: req.userId || null,
@@ -1389,7 +1402,7 @@ proxyRoutes.post('/rerank', authenticateApiToken, checkRateLimit, async (req: To
           path: '/v1/rerank',
           statusCode: 200,
           requestBody: req.body,
-          responseBody: data,
+          responseBody: null,
           inputTokens,
           outputTokens: 0,
           latencyMs,
@@ -1399,7 +1412,9 @@ proxyRoutes.post('/rerank', authenticateApiToken, checkRateLimit, async (req: To
           stream: false,
         }).catch(() => {});
 
-        res.json(data);
+        // Forward raw text directly — no JSON.parse() + JSON.stringify() cycle
+        res.setHeader('Content-Type', 'application/json');
+        res.status(200).send(responseText);
         return;
 
       } catch (error) {
