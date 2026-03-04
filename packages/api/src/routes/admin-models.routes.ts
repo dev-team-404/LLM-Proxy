@@ -202,8 +202,9 @@ async function testEndpointHealth(
     runSingleTest('ToolCall-D (default,auto)', endpointUrl, apiKey, extraHeaders, toolBodyD, true),
   ]);
 
-  const allPassed = chatCompletion.passed && toolCallA.passed && toolCallB.passed && toolCallC.passed && toolCallD.passed;
-  console.log(`[EndpointTest] ========== 테스트 완료 | model=${model} | chat=${chatCompletion.passed ? 'PASS' : 'FAIL'} | A=${toolCallA.passed ? 'PASS' : 'FAIL'} | B=${toolCallB.passed ? 'PASS' : 'FAIL'} | C=${toolCallC.passed ? 'PASS' : 'FAIL'} | D=${toolCallD.passed ? 'PASS' : 'FAIL'} | result=${allPassed ? 'ALL PASS' : 'FAIL'} ==========`);
+  const toolCallPassCount = [toolCallA, toolCallB, toolCallC, toolCallD].filter(t => t.passed).length;
+  const allPassed = chatCompletion.passed && toolCallPassCount >= 1;
+  console.log(`[EndpointTest] ========== 테스트 완료 | model=${model} | chat=${chatCompletion.passed ? 'PASS' : 'FAIL'} | A=${toolCallA.passed ? 'PASS' : 'FAIL'} | B=${toolCallB.passed ? 'PASS' : 'FAIL'} | C=${toolCallC.passed ? 'PASS' : 'FAIL'} | D=${toolCallD.passed ? 'PASS' : 'FAIL'} | toolCall=${toolCallPassCount}/4 | result=${allPassed ? 'PASS' : 'FAIL'} ==========`);
 
   return { chatCompletion, toolCallA, toolCallB, toolCallC, toolCallD, allPassed };
 }

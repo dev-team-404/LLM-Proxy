@@ -434,7 +434,7 @@ function ModelDialog({
             {needsTest && !testPassed && (
               <p className="text-xs text-amber-600 flex items-center gap-1">
                 <AlertTriangle className="w-3.5 h-3.5" />
-                {isNew ? '새 모델 추가 시 모든 테스트(5건)를 통과해야 합니다.' : '엔드포인트 설정이 변경되었습니다. 재테스트가 필요합니다.'}
+                {isNew ? '새 모델 추가 시 Chat 테스트 + Tool Call 1개 이상 통과해야 합니다.' : '엔드포인트 설정이 변경되었습니다. 재테스트가 필요합니다.'}
               </p>
             )}
           </div>
@@ -721,7 +721,7 @@ function SubModelDialog({
             {!testPassed && (
               <p className="text-xs text-amber-600 flex items-center gap-1">
                 <AlertTriangle className="w-3.5 h-3.5" />
-                서브모델 추가 시 모든 테스트(5건)를 통과해야 합니다.
+                서브모델 추가 시 Chat 테스트 + Tool Call 1개 이상 통과해야 합니다.
               </p>
             )}
           </div>
@@ -916,8 +916,14 @@ export default function AdminModels() {
       }),
     onSuccess: (data) => {
       setTestingId(null);
+      const toolResults = [data.toolCallA, data.toolCallB, data.toolCallC, data.toolCallD];
+      const toolPassCount = toolResults.filter(t => t?.passed).length;
       if (data.allPassed) {
-        alert('모든 테스트 통과! (5/5)');
+        if (toolPassCount === 4) {
+          alert('모든 테스트 통과! (5/5)');
+        } else {
+          alert(`테스트 통과! (Chat + ToolCall ${toolPassCount}/4)\n일부 Tool Call 시나리오가 실패했지만 등록 가능합니다.`);
+        }
       } else {
         const msgs: string[] = [];
         if (!data.chatCompletion?.passed) msgs.push(`Chat: ${data.chatCompletion?.message}`);
