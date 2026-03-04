@@ -192,6 +192,7 @@ function ModelDialog({
     toolCallB?: TestResult;
     toolCallC?: TestResult;
     toolCallD?: TestResult;
+    largePayload?: TestResult;
     allPassed?: boolean;
   } | null>(null);
   const [testing, setTesting] = useState(false);
@@ -264,7 +265,7 @@ function ModelDialog({
     } catch {
       const fail: TestResult = { passed: false, latencyMs: 0, message: 'Test request failed' };
       setTestResults({
-        chatCompletion: fail, toolCallA: fail, toolCallB: fail, toolCallC: fail, toolCallD: fail,
+        chatCompletion: fail, toolCallA: fail, toolCallB: fail, toolCallC: fail, toolCallD: fail, largePayload: fail,
         allPassed: false,
       });
     } finally {
@@ -594,6 +595,7 @@ function ModelDialog({
                     <TestResultDisplay label="ToolCall-B (temp=0, auto)" result={testResults.toolCallB} />
                     <TestResultDisplay label="ToolCall-C (default, required)" result={testResults.toolCallC} />
                     <TestResultDisplay label="ToolCall-D (default, auto)" result={testResults.toolCallD} />
+                    <TestResultDisplay label="Large Payload (60KB+)" result={testResults.largePayload} />
                   </div>
                 )}
 
@@ -780,6 +782,7 @@ function SubModelDialog({
     toolCallB?: TestResult;
     toolCallC?: TestResult;
     toolCallD?: TestResult;
+    largePayload?: TestResult;
     allPassed?: boolean;
   } | null>(null);
   const [testing, setTesting] = useState(false);
@@ -834,7 +837,7 @@ function SubModelDialog({
     } catch {
       const fail: TestResult = { passed: false, latencyMs: 0, message: 'Test request failed' };
       setTestResults({
-        chatCompletion: fail, toolCallA: fail, toolCallB: fail, toolCallC: fail, toolCallD: fail,
+        chatCompletion: fail, toolCallA: fail, toolCallB: fail, toolCallC: fail, toolCallD: fail, largePayload: fail,
         allPassed: false,
       });
     } finally {
@@ -1063,6 +1066,7 @@ function SubModelDialog({
                     <TestResultDisplay label="ToolCall-B (temp=0, auto)" result={testResults.toolCallB} />
                     <TestResultDisplay label="ToolCall-C (default, required)" result={testResults.toolCallC} />
                     <TestResultDisplay label="ToolCall-D (default, auto)" result={testResults.toolCallD} />
+                    <TestResultDisplay label="Large Payload (60KB+)" result={testResults.largePayload} />
                   </div>
                 )}
 
@@ -1374,11 +1378,15 @@ export default function AdminModels() {
       } else {
         const toolResults = [data.toolCallA, data.toolCallB, data.toolCallC, data.toolCallD];
         const toolPassCount = toolResults.filter((t: any) => t?.passed).length;
+        const largeOk = data.largePayload?.passed;
         if (data.allPassed) {
-          if (toolPassCount === 4) {
-            alert('모든 테스트 통과! (5/5)');
+          const totalPass = 1 + toolPassCount + (largeOk ? 1 : 0);
+          if (toolPassCount === 4 && largeOk) {
+            alert('모든 테스트 통과! (6/6)');
           } else {
-            alert(`테스트 통과! (Chat + ToolCall ${toolPassCount}/4)\n일부 Tool Call 시나리오가 실패했지만 등록 가능합니다.`);
+            const parts = [`Chat + ToolCall ${toolPassCount}/4`];
+            if (!largeOk) parts.push('LargePayload FAIL');
+            alert(`테스트 통과! (${totalPass}/6)\n${parts.join(', ')}\n일부 시나리오가 실패했지만 등록 가능합니다.`);
           }
         } else {
           const msgs: string[] = [];
@@ -1387,6 +1395,7 @@ export default function AdminModels() {
           if (!data.toolCallB?.passed) msgs.push(`ToolCall-B: ${data.toolCallB?.message}`);
           if (!data.toolCallC?.passed) msgs.push(`ToolCall-C: ${data.toolCallC?.message}`);
           if (!data.toolCallD?.passed) msgs.push(`ToolCall-D: ${data.toolCallD?.message}`);
+          if (!data.largePayload?.passed) msgs.push(`LargePayload: ${data.largePayload?.message}`);
           alert(`테스트 실패:\n${msgs.join('\n')}`);
         }
       }

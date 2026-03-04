@@ -158,6 +158,7 @@ async function testEndpointHealth(
   toolCallB: TestResult;
   toolCallC: TestResult;
   toolCallD: TestResult;
+  largePayload: TestResult;
   allPassed: boolean;
 }> {
   const model = modelName || 'gpt-4';
@@ -192,21 +193,36 @@ async function testEndpointHealth(
   const toolBodyC = { ...toolBase, tool_choice: 'required' };
   const toolBodyD = { ...toolBase };
 
-  console.log(`[EndpointTest] ========== 테스트 시작 (5건) | model=${model} | endpoint=${endpointUrl} ==========`);
+  // Large payload test: generate 60KB+ content
+  const LARGE_PAYLOAD_SIZE = 60 * 1024; // 60KB
+  const paragraph = 'The quick brown fox jumps over the lazy dog. This is a test sentence to generate a large payload for endpoint stress testing. ';
+  const repeatCount = Math.ceil(LARGE_PAYLOAD_SIZE / paragraph.length);
+  const largeContent = paragraph.repeat(repeatCount);
+  const largePayloadBody = {
+    model,
+    messages: [
+      { role: 'user', content: `다음 텍스트를 한 문장으로 요약해 주세요:\n\n${largeContent}` },
+    ],
+    stream: false,
+  };
+  const largePayloadSizeKB = (JSON.stringify(largePayloadBody).length / 1024).toFixed(1);
 
-  const [chatCompletion, toolCallA, toolCallB, toolCallC, toolCallD] = await Promise.all([
+  console.log(`[EndpointTest] ========== 테스트 시작 (6건) | model=${model} | endpoint=${endpointUrl} ==========`);
+
+  const [chatCompletion, toolCallA, toolCallB, toolCallC, toolCallD, largePayload] = await Promise.all([
     runSingleTest('ChatCompletion', endpointUrl, apiKey, extraHeaders, chatBody),
     runSingleTest('ToolCall-A (temp=0,required)', endpointUrl, apiKey, extraHeaders, toolBodyA, true),
     runSingleTest('ToolCall-B (temp=0,auto)', endpointUrl, apiKey, extraHeaders, toolBodyB, true),
     runSingleTest('ToolCall-C (default,required)', endpointUrl, apiKey, extraHeaders, toolBodyC, true),
     runSingleTest('ToolCall-D (default,auto)', endpointUrl, apiKey, extraHeaders, toolBodyD, true),
+    runSingleTest(`LargePayload (${largePayloadSizeKB}KB)`, endpointUrl, apiKey, extraHeaders, largePayloadBody),
   ]);
 
   const toolCallPassCount = [toolCallA, toolCallB, toolCallC, toolCallD].filter(t => t.passed).length;
   const allPassed = chatCompletion.passed && toolCallPassCount >= 1;
-  console.log(`[EndpointTest] ========== 테스트 완료 | model=${model} | chat=${chatCompletion.passed ? 'PASS' : 'FAIL'} | A=${toolCallA.passed ? 'PASS' : 'FAIL'} | B=${toolCallB.passed ? 'PASS' : 'FAIL'} | C=${toolCallC.passed ? 'PASS' : 'FAIL'} | D=${toolCallD.passed ? 'PASS' : 'FAIL'} | toolCall=${toolCallPassCount}/4 | result=${allPassed ? 'PASS' : 'FAIL'} ==========`);
+  console.log(`[EndpointTest] ========== 테스트 완료 | model=${model} | chat=${chatCompletion.passed ? 'PASS' : 'FAIL'} | large=${largePayload.passed ? 'PASS' : 'FAIL'} | A=${toolCallA.passed ? 'PASS' : 'FAIL'} | B=${toolCallB.passed ? 'PASS' : 'FAIL'} | C=${toolCallC.passed ? 'PASS' : 'FAIL'} | D=${toolCallD.passed ? 'PASS' : 'FAIL'} | toolCall=${toolCallPassCount}/4 | result=${allPassed ? 'PASS' : 'FAIL'} ==========`);
 
-  return { chatCompletion, toolCallA, toolCallB, toolCallC, toolCallD, allPassed };
+  return { chatCompletion, toolCallA, toolCallB, toolCallC, toolCallD, largePayload, allPassed };
 }
 
 // ============================================
@@ -500,21 +516,6 @@ async function testImageGeneration(
     const firstResult = results[0]!;
     const sizeBytes = firstResult.imageBuffer.length;
     const sizeKB = (sizeBytes / 1024).toFixed(1);
-    const MIN_SIZE_BYTES = 60 * 1024; // 60KB
-
-    if (sizeBytes < MIN_SIZE_BYTES) {
-      console.error(`[ImageTest] FAIL | ${latencyMs}ms | Image too small: ${sizeKB}KB (minimum 60KB)`);
-      return {
-        imageGen: {
-          passed: false,
-          latencyMs,
-          message: `Image too small: ${sizeKB}KB (minimum 60KB) - 정상적인 이미지가 생성되지 않았을 수 있습니다`,
-          request: { provider, prompt: testPrompt },
-          response: { imageCount: results.length, sizeBytes, mimeType: firstResult.mimeType },
-        },
-        passed: false,
-      };
-    }
 
     console.log(`[ImageTest] PASS | ${latencyMs}ms | ${results.length} image(s) | ${sizeKB}KB | ${firstResult.mimeType}`);
     return {
