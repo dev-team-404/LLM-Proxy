@@ -7,6 +7,13 @@ version: '3.8'
 x-timezone: &timezone
   TZ: Asia/Seoul
 
+x-build-env: &build-env
+  HTTP_PROXY: "${HTTP_PROXY:-}"
+  HTTPS_PROXY: "${HTTPS_PROXY:-}"
+  http_proxy: "${HTTP_PROXY:-}"
+  https_proxy: "${HTTPS_PROXY:-}"
+  NODE_TLS_REJECT_UNAUTHORIZED: "${NODE_TLS_REJECT_UNAUTHORIZED:-0}"
+
 x-proxy-env: &proxy-env
   <<: *timezone
   NODE_TLS_REJECT_UNAUTHORIZED: "${NODE_TLS_REJECT_UNAUTHORIZED:-0}"
@@ -54,7 +61,7 @@ services:
       context: ./packages/api
       dockerfile: Dockerfile
       args:
-        <<: *proxy-env
+        <<: *build-env
     container_name: llm-gateway-api
     restart: unless-stopped
     environment:
@@ -92,7 +99,7 @@ services:
       context: ./packages/dashboard
       dockerfile: Dockerfile
       args:
-        <<: *proxy-env
+        <<: *build-env
     container_name: llm-gateway-dashboard
     restart: unless-stopped
     environment:
