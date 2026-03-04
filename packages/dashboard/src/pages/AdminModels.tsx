@@ -343,8 +343,10 @@ function ModelDialog({
         extraBody: form.extraBody ? JSON.parse(form.extraBody) : undefined,
       });
       setImageTestResult(result);
-    } catch {
-      setImageTestResult({ imageGen: { passed: false, latencyMs: 0, message: 'Image test request failed' }, passed: false });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.imageGen?.message || err?.message || 'Image test request failed';
+      console.error('[ImageTest] Error:', err);
+      setImageTestResult({ imageGen: { passed: false, latencyMs: 0, message: msg }, passed: false });
     } finally {
       setImageTesting(false);
     }
@@ -889,8 +891,10 @@ function SubModelDialog({
     try {
       const result = await api.admin.models.testImage(getTestParams());
       setImageTestResult(result);
-    } catch {
-      setImageTestResult({ imageGen: { passed: false, latencyMs: 0, message: 'Image test request failed' }, passed: false });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.imageGen?.message || err?.message || 'Image test request failed';
+      console.error('[ImageTest] Error:', err);
+      setImageTestResult({ imageGen: { passed: false, latencyMs: 0, message: msg }, passed: false });
     } finally {
       setImageTesting(false);
     }
