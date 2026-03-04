@@ -26,6 +26,8 @@ import { adminRoutes } from './routes/admin.routes.js';
 import { holidaysRoutes } from './routes/holidays.routes.js';
 import { llmTestRoutes } from './routes/llm-test.routes.js';
 import { startLLMTestScheduler, stopLLMTestScheduler } from './services/llm-test.service.js';
+import { startImageCleanupScheduler, stopImageCleanupScheduler } from './services/imageCleanup.service.js';
+import { ensureStorageDir } from './services/imageStorage.service.js';
 
 import 'dotenv/config';
 
@@ -184,6 +186,7 @@ if (cluster.isPrimary) {
   async function shutdown() {
     console.log(`[Worker ${process.pid}] Shutting down...`);
     stopLLMTestScheduler();
+    stopImageCleanupScheduler();
     await prisma.$disconnect();
     await redis.quit();
     process.exit(0);
@@ -199,10 +202,14 @@ if (cluster.isPrimary) {
     await redis.ping();
     console.log(`[Worker ${process.pid}] Redis connected`);
 
-    // Only first worker initializes defaults and scheduler
+    // Ensure image storage directory exists (all workers need it)
+    ensureStorageDir();
+
+    // Only first worker initializes defaults and schedulers
     if (cluster.worker?.id === 1) {
       await ensureDefaultRateLimits();
       startLLMTestScheduler();
+      startImageCleanupScheduler();
     }
 
     const proxyServer = proxyApp.listen(PROXY_PORT, () => {

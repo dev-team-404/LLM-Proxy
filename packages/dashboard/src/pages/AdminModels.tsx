@@ -42,7 +42,7 @@ interface SubModel {
   enabled: boolean;
 }
 
-type ModelType = 'CHAT' | 'EMBEDDING' | 'RERANKING';
+type ModelType = 'CHAT' | 'EMBEDDING' | 'RERANKING' | 'IMAGE';
 
 interface Model {
   id: string;
@@ -198,6 +198,8 @@ function ModelDialog({
   const [embeddingTesting, setEmbeddingTesting] = useState(false);
   const [rerankTestResult, setRerankTestResult] = useState<{ rerank?: TestResult; passed?: boolean } | null>(null);
   const [rerankTesting, setRerankTesting] = useState(false);
+  const [imageTestResult, setImageTestResult] = useState<{ imageGen?: TestResult; passed?: boolean } | null>(null);
+  const [imageTesting, setImageTesting] = useState(false);
 
   // Track initial endpoint values for edit mode
   const [initialEndpoint, setInitialEndpoint] = useState('');
@@ -219,6 +221,8 @@ function ModelDialog({
       setEmbeddingTesting(false);
       setRerankTestResult(null);
       setRerankTesting(false);
+      setImageTestResult(null);
+      setImageTesting(false);
     }
   }, [open, initialData]);
 
@@ -318,12 +322,31 @@ function ModelDialog({
     }
   };
 
+  const runImageTest = async () => {
+    setImageTesting(true);
+    setImageTestResult(null);
+    try {
+      const result = await api.admin.models.testImage({
+        endpointUrl: form.endpointUrl,
+        modelName: form.upstreamModelName || form.name,
+        apiKey: form.apiKey || undefined,
+        extraHeaders: form.extraHeaders ? JSON.parse(form.extraHeaders) : undefined,
+      });
+      setImageTestResult(result);
+    } catch {
+      setImageTestResult({ imageGen: { passed: false, latencyMs: 0, message: 'Image test request failed' }, passed: false });
+    } finally {
+      setImageTesting(false);
+    }
+  };
+
   // For new models: test must pass. For edits with endpoint changes: test must pass.
   const needsTest = isNew || endpointChanged;
   const testPassed = (() => {
     switch (form.type) {
       case 'EMBEDDING': return embeddingTestResult?.passed === true;
       case 'RERANKING': return rerankTestResult?.passed === true;
+      case 'IMAGE': return imageTestResult?.passed === true;
       default: return testResults?.allPassed === true;
     }
   })();
@@ -408,6 +431,7 @@ function ModelDialog({
                 setTestResults(null);
                 setEmbeddingTestResult(null);
                 setRerankTestResult(null);
+                setImageTestResult(null);
                 setVlTestResult(null);
               }}
               className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none"
@@ -415,11 +439,13 @@ function ModelDialog({
               <option value="CHAT">Chat (채팅 모델)</option>
               <option value="EMBEDDING">Embedding (임베딩 모델)</option>
               <option value="RERANKING">Reranking (리랭킹 모델)</option>
+              <option value="IMAGE">Image (이미지 생성 모델)</option>
             </select>
             <p className="mt-1 text-xs text-gray-400">
               {form.type === 'CHAT' && 'Chat Completion + Tool Call 테스트를 진행합니다.'}
               {form.type === 'EMBEDDING' && 'Embedding API 테스트를 진행합니다.'}
               {form.type === 'RERANKING' && 'Rerank API 테스트를 진행합니다.'}
+              {form.type === 'IMAGE' && 'Image Generation API 테스트를 진행합니다.'}
             </p>
           </div>
           <div>
@@ -436,6 +462,7 @@ function ModelDialog({
               {form.type === 'CHAT' && 'v1/ 또는 v1/chat/completions 형식 모두 사용 가능'}
               {form.type === 'EMBEDDING' && 'v1/ 또는 v1/embeddings 형식 모두 사용 가능'}
               {form.type === 'RERANKING' && 'v1/ 또는 v1/rerank 형식 모두 사용 가능'}
+              {form.type === 'IMAGE' && 'v1/ 또는 v1/images/generations 형식 모두 사용 가능'}
             </p>
           </div>
           <div>
@@ -629,6 +656,36 @@ function ModelDialog({
             </div>
           )}
 
+          {form.type === 'IMAGE' && (
+            <div className="border-t pt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-gray-700">Image Generation 테스트</h4>
+                <button
+                  type="button"
+                  onClick={runImageTest}
+                  disabled={imageTesting || !form.endpointUrl}
+                  className="px-3 py-1.5 text-sm bg-pink-500 text-white rounded-lg hover:bg-pink-600 disabled:opacity-50 flex items-center gap-1.5 transition-colors"
+                >
+                  {imageTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                  테스트 실행
+                </button>
+              </div>
+
+              {imageTestResult && (
+                <div className="space-y-2 bg-pink-50 rounded-lg p-3">
+                  <TestResultDisplay label="Image Generation" result={imageTestResult.imageGen} />
+                </div>
+              )}
+
+              {needsTest && !testPassed && (
+                <p className="text-xs text-amber-600 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  {isNew ? 'Image 모델 추가 시 Image 테스트를 통과해야 합니다.' : '엔드포인트 설정이 변경되었습니다. 재테스트가 필요합니다.'}
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="flex justify-end gap-3 pt-4">
             <button
               type="button"
@@ -686,6 +743,8 @@ function SubModelDialog({
   const [embeddingTesting, setEmbeddingTesting] = useState(false);
   const [rerankTestResult, setRerankTestResult] = useState<{ rerank?: TestResult; passed?: boolean } | null>(null);
   const [rerankTesting, setRerankTesting] = useState(false);
+  const [imageTestResult, setImageTestResult] = useState<{ imageGen?: TestResult; passed?: boolean } | null>(null);
+  const [imageTesting, setImageTesting] = useState(false);
 
   const parentType: ModelType = parentModel.type || 'CHAT';
 
@@ -700,6 +759,8 @@ function SubModelDialog({
       setEmbeddingTesting(false);
       setRerankTestResult(null);
       setRerankTesting(false);
+      setImageTestResult(null);
+      setImageTesting(false);
     }
   }, [open]);
 
@@ -772,10 +833,24 @@ function SubModelDialog({
     }
   };
 
+  const runImageTest = async () => {
+    setImageTesting(true);
+    setImageTestResult(null);
+    try {
+      const result = await api.admin.models.testImage(getTestParams());
+      setImageTestResult(result);
+    } catch {
+      setImageTestResult({ imageGen: { passed: false, latencyMs: 0, message: 'Image test request failed' }, passed: false });
+    } finally {
+      setImageTesting(false);
+    }
+  };
+
   const testPassed = (() => {
     switch (parentType) {
       case 'EMBEDDING': return embeddingTestResult?.passed === true;
       case 'RERANKING': return rerankTestResult?.passed === true;
+      case 'IMAGE': return imageTestResult?.passed === true;
       default: return testResults?.allPassed === true;
     }
   })();
@@ -1021,6 +1096,34 @@ function SubModelDialog({
             </div>
           )}
 
+          {parentType === 'IMAGE' && (
+            <div className="border-t pt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-gray-700">Image Generation 테스트</h4>
+                <button
+                  type="button"
+                  onClick={runImageTest}
+                  disabled={imageTesting || !form.endpointUrl}
+                  className="px-3 py-1.5 text-sm bg-pink-500 text-white rounded-lg hover:bg-pink-600 disabled:opacity-50 flex items-center gap-1.5 transition-colors"
+                >
+                  {imageTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                  테스트 실행
+                </button>
+              </div>
+              {imageTestResult && (
+                <div className="space-y-2 bg-pink-50 rounded-lg p-3">
+                  <TestResultDisplay label="Image Generation" result={imageTestResult.imageGen} />
+                </div>
+              )}
+              {!testPassed && (
+                <p className="text-xs text-amber-600 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  서브모델 추가 시 Image 테스트를 통과해야 합니다.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="flex justify-end gap-3 pt-4">
             <button
               type="button"
@@ -1176,6 +1279,7 @@ export default function AdminModels() {
       switch (model.type) {
         case 'EMBEDDING': return api.admin.models.testEmbedding(params);
         case 'RERANKING': return api.admin.models.testRerank(params);
+        case 'IMAGE': return api.admin.models.testImage(params);
         default: return api.admin.models.test(params);
       }
     },
@@ -1185,6 +1289,8 @@ export default function AdminModels() {
         alert(data.passed ? 'Embedding 테스트 통과!' : `Embedding 테스트 실패: ${data.embedding?.message}`);
       } else if (model.type === 'RERANKING') {
         alert(data.passed ? 'Rerank 테스트 통과!' : `Rerank 테스트 실패: ${data.rerank?.message}`);
+      } else if (model.type === 'IMAGE') {
+        alert(data.passed ? 'Image 테스트 통과!' : `Image 테스트 실패: ${data.imageGen?.message}`);
       } else {
         const toolResults = [data.toolCallA, data.toolCallB, data.toolCallC, data.toolCallD];
         const toolPassCount = toolResults.filter((t: any) => t?.passed).length;
@@ -1459,10 +1565,12 @@ function ModelRow({
           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
             model.type === 'EMBEDDING' ? 'bg-emerald-100 text-emerald-700' :
             model.type === 'RERANKING' ? 'bg-orange-100 text-orange-700' :
+            model.type === 'IMAGE' ? 'bg-pink-100 text-pink-700' :
             'bg-blue-100 text-blue-700'
           }`}>
             {model.type === 'EMBEDDING' ? 'Embedding' :
-             model.type === 'RERANKING' ? 'Reranking' : 'Chat'}
+             model.type === 'RERANKING' ? 'Reranking' :
+             model.type === 'IMAGE' ? 'Image' : 'Chat'}
           </span>
         </td>
         <td className="py-3 px-4 text-xs font-mono text-gray-500 max-w-[200px] truncate">{model.endpointUrl}</td>

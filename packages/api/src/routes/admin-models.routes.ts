@@ -456,6 +456,83 @@ async function testRerank(
 }
 
 // ============================================
+// Image Generation Test
+// ============================================
+function normalizeImagesUrl(endpointUrl: string): string {
+  let url = endpointUrl.trim().replace(/\/+$/, '');
+  if (url.endsWith('/images/generations')) return url;
+  url = url.replace(/\/chat\/completions$/, '').replace(/\/embeddings$/, '').replace(/\/rerank$/, '');
+  if (url.endsWith('/v1')) return `${url}/images/generations`;
+  return `${url}/images/generations`;
+}
+
+async function testImageGeneration(
+  endpointUrl: string,
+  apiKey?: string | null,
+  extraHeaders?: Record<string, string> | null,
+  modelName?: string | null,
+): Promise<{ imageGen: TestResult; passed: boolean }> {
+  const model = modelName || 'unknown';
+  const url = normalizeImagesUrl(endpointUrl);
+  const start = Date.now();
+  const body = {
+    model,
+    prompt: 'A simple red circle on a white background',
+    n: 1,
+    size: '1024x1024',
+  };
+
+  console.log(`[ImageTest] ========== 테스트 시작 | model=${model} | url=${url} ==========`);
+
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    if (extraHeaders) Object.assign(headers, extraHeaders);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
+    clearTimeout(timeout);
+
+    const latencyMs = Date.now() - start;
+    const rawText = await response.text().catch(() => '');
+    let responseBody: Record<string, any> | null = null;
+    try { responseBody = JSON.parse(rawText); } catch { /* keep null */ }
+
+    if (!response.ok) {
+      console.error(`[ImageTest] FAIL | ${latencyMs}ms | HTTP ${response.status}`);
+      return { imageGen: { passed: false, latencyMs, message: `HTTP ${response.status}: ${rawText.substring(0, 500)}`, statusCode: response.status, request: body, response: responseBody || rawText.substring(0, 1000) }, passed: false };
+    }
+
+    // Validate: data array with url or b64_json
+    const data = responseBody?.data;
+    if (!Array.isArray(data) || data.length === 0) {
+      console.error(`[ImageTest] FAIL | Invalid response structure`);
+      return { imageGen: { passed: false, latencyMs, message: 'Response does not contain valid data array', statusCode: response.status, request: body, response: responseBody || undefined }, passed: false };
+    }
+
+    const first = data[0];
+    if (!first.url && !first.b64_json) {
+      return { imageGen: { passed: false, latencyMs, message: 'data[0] has neither url nor b64_json', statusCode: response.status, request: body, response: responseBody || undefined }, passed: false };
+    }
+
+    // Truncate b64_json for logging
+    const logResponse = responseBody ? JSON.parse(JSON.stringify(responseBody, (key, value) => {
+      if (key === 'b64_json' && typeof value === 'string') return value.substring(0, 40) + '...[truncated]';
+      return value;
+    })) : undefined;
+
+    console.log(`[ImageTest] PASS | ${latencyMs}ms | images=${data.length}`);
+    return { imageGen: { passed: true, latencyMs, message: `OK (${data.length} image(s) generated)`, statusCode: response.status, request: body, response: logResponse }, passed: true };
+  } catch (error) {
+    const latencyMs = Date.now() - start;
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[ImageTest] ERROR | ${latencyMs}ms | ${msg}`);
+    return { imageGen: { passed: false, latencyMs, message: msg, request: body }, passed: false };
+  }
+}
+
+// ============================================
 // Model CRUD
 // ============================================
 
@@ -506,7 +583,7 @@ adminModelsRoutes.post('/', requireWriteAccess, async (req: AuthenticatedRequest
       extraBody?: Record<string, any>;
       maxTokens?: number;
       enabled?: boolean;
-      type?: 'CHAT' | 'EMBEDDING' | 'RERANKING';
+      type?: 'CHAT' | 'EMBEDDING' | 'RERANKING' | 'IMAGE';
     };
 
     if (!name || !displayName || !endpointUrl) {
@@ -639,7 +716,7 @@ adminModelsRoutes.put('/:id', requireWriteAccess, async (req: AuthenticatedReque
       extraBody?: Record<string, any> | null;
       maxTokens?: number;
       enabled?: boolean;
-      type?: 'CHAT' | 'EMBEDDING' | 'RERANKING';
+      type?: 'CHAT' | 'EMBEDDING' | 'RERANKING' | 'IMAGE';
     };
 
     const existing = await prisma.model.findUnique({ where: { id } });
@@ -855,6 +932,26 @@ adminModelsRoutes.post('/test-rerank', requireWriteAccess, async (req: Authentic
   } catch (error) {
     console.error('Error testing rerank endpoint:', error);
     res.status(500).json({ error: 'Failed to test rerank endpoint' });
+  }
+});
+
+/**
+ * POST /admin/models/test-image - Test image generation endpoint
+ */
+adminModelsRoutes.post('/test-image', requireWriteAccess, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { endpointUrl, apiKey, extraHeaders, modelName } = req.body as {
+      endpointUrl?: string;
+      apiKey?: string;
+      extraHeaders?: Record<string, string>;
+      modelName?: string;
+    };
+    if (!endpointUrl) { res.status(400).json({ error: 'endpointUrl is required' }); return; }
+    const result = await testImageGeneration(endpointUrl, apiKey, extraHeaders, modelName);
+    res.json(result);
+  } catch (error) {
+    console.error('Error testing image generation endpoint:', error);
+    res.status(500).json({ error: 'Failed to test image generation endpoint' });
   }
 });
 

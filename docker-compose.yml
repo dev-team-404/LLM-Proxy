@@ -78,8 +78,12 @@ services:
       DEFAULT_TPH: ${DEFAULT_TPH:-0}
       DEFAULT_TPD: ${DEFAULT_TPD:-0}
       REQUEST_LOG_RETENTION_DAYS: ${REQUEST_LOG_RETENTION_DAYS:-30}
+      IMAGE_STORAGE_PATH: /app/generated-images
+      IMAGE_EXPIRY_HOURS: ${IMAGE_EXPIRY_HOURS:-168}
+      IMAGE_BASE_URL: ${IMAGE_BASE_URL:-}
     volumes:
       - ./cert:/app/cert:ro
+      - generated_images:/app/generated-images
     expose:
       - "3000"
       - "3001"
@@ -123,3 +127,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  generated_images:

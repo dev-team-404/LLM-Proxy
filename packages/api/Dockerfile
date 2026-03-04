@@ -39,6 +39,9 @@ COPY image.png ./
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
+# Create image storage directory with correct permissions
+RUN mkdir -p /app/generated-images && chown nodejs:nodejs /app/generated-images
+
 USER nodejs
 
 EXPOSE 3000 3001

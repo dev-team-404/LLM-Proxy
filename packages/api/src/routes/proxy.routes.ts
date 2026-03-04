@@ -8,6 +8,7 @@
  */
 
 import { Router, Response } from 'express';
+import path from 'node:path';
 import { prisma, redis } from '../index.js';
 import { authenticateApiToken, TokenAuthenticatedRequest } from '../middleware/tokenAuth.js';
 import { checkRateLimit } from '../middleware/rateLimiter.js';
@@ -15,6 +16,7 @@ import { recordUsage, checkBudget } from '../services/usage.service.js';
 import { logRequest } from '../services/requestLog.service.js';
 import { isEndpointAvailable, recordEndpointSuccess, recordEndpointFailure } from '../services/circuitBreaker.service.js';
 import { recordTokenRateLimit } from '../middleware/rateLimiter.js';
+import { saveImage, buildImageUrl, IMAGE_STORAGE_PATH } from '../services/imageStorage.service.js';
 
 export const proxyRoutes = Router();
 
@@ -142,6 +144,25 @@ function buildRerankUrl(endpointUrl: string): string {
     url = url.replace(/\/embeddings$/, '');
   }
   return `${url}/rerank`;
+}
+
+/**
+ * Build the /images/generations URL from an endpoint base URL.
+ */
+function buildImagesGenerationsUrl(endpointUrl: string): string {
+  let url = endpointUrl.trim();
+  if (url.endsWith('/images/generations')) return url;
+  if (url.endsWith('/')) url = url.slice(0, -1);
+  if (url.endsWith('/v1')) return `${url}/images/generations`;
+  // Strip known suffixes
+  if (url.endsWith('/chat/completions')) {
+    url = url.replace(/\/chat\/completions$/, '');
+  } else if (url.endsWith('/embeddings')) {
+    url = url.replace(/\/embeddings$/, '');
+  } else if (url.endsWith('/rerank')) {
+    url = url.replace(/\/rerank$/, '');
+  }
+  return `${url}/images/generations`;
 }
 
 /**
@@ -1480,6 +1501,327 @@ proxyRoutes.post('/rerank', authenticateApiToken, checkRateLimit, async (req: To
       ipAddress: req.ip || null,
       stream: false,
     }).catch(() => {});
+  }
+});
+
+// ============================================
+// Image Generation
+// ============================================
+
+/**
+ * POST /v1/images/generations
+ * Proxy image generation request to upstream.
+ * Intercepts response, saves images locally, returns local URLs.
+ */
+proxyRoutes.post('/images/generations', authenticateApiToken, checkRateLimit, async (req: TokenAuthenticatedRequest, res: Response) => {
+  const startTime = Date.now();
+
+  try {
+    const { model: modelName, prompt, n, size, response_format, quality, style, ...otherParams } = req.body;
+
+    if (!modelName || !prompt) {
+      res.status(400).json({ error: { type: 'invalid_request_error', message: 'model and prompt are required' } });
+      return;
+    }
+
+    // Resolve model
+    const model = await resolveModel(modelName);
+    if (!model) {
+      res.status(404).json({ error: { type: 'not_found', message: `Model '${modelName}' not found or disabled` } });
+      return;
+    }
+
+    if (model.type !== 'IMAGE') {
+      res.status(400).json({ error: { type: 'invalid_request_error', message: `Model '${modelName}' is not an IMAGE model` } });
+      return;
+    }
+
+    // Check allowedModels
+    if (req.apiToken?.allowedModels?.length && req.apiToken.allowedModels.length > 0 && !req.apiToken.allowedModels.includes(model.id)) {
+      res.status(403).json({
+        error: { type: 'permission_error', message: `Your API key does not have access to model '${modelName}'` },
+      });
+      return;
+    }
+
+    // Budget check
+    const budgetCheck = await checkBudget(req.userId!, req.apiTokenId || null, req.user?.deptname);
+    if (!budgetCheck.allowed) {
+      res.status(429).json({ error: { type: 'budget_exceeded', message: budgetCheck.reason } });
+      return;
+    }
+
+    // Get endpoints
+    const endpoints = await getModelEndpoints(model.id, {
+      endpointUrl: model.endpointUrl,
+      apiKey: model.apiKey,
+      modelName: model.upstreamModelName || model.name,
+      extraHeaders: model.extraHeaders as Record<string, string> | null,
+      extraBody: model.extraBody as Record<string, any> | null,
+    });
+    const startIdx = await getRoundRobinIndex(model.id, endpoints.length);
+
+    let lastError: string | undefined;
+
+    for (let attempt = 0; attempt < endpoints.length; attempt++) {
+      const idx = (startIdx + attempt) % endpoints.length;
+      const endpoint = endpoints[idx]!;
+
+      if (!await isEndpointAvailable(endpoint.endpointUrl)) {
+        console.log(`[CircuitBreaker] Skipping ${endpoint.endpointUrl}`);
+        continue;
+      }
+
+      if (attempt > 0) {
+        console.log(`[Failover] Model "${model.name}" trying endpoint ${attempt + 1}/${endpoints.length}: ${endpoint.endpointUrl}`);
+      }
+
+      const upstreamUrl = buildImagesGenerationsUrl(endpoint.endpointUrl);
+      const headers = buildHeaders(endpoint);
+
+      const requestBody: Record<string, any> = {
+        model: endpoint.modelName,
+        prompt,
+        ...(endpoint.extraBody || {}),
+        ...otherParams,
+      };
+      if (n) requestBody.n = n;
+      if (size) requestBody.size = size;
+      if (quality) requestBody.quality = quality;
+      if (style) requestBody.style = style;
+      // Try to get base64 for local storage, but accept whatever format comes back
+      requestBody.response_format = response_format || 'b64_json';
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+        const upstreamResponse = await fetch(upstreamUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (!upstreamResponse.ok) {
+          const errorText = await upstreamResponse.text();
+          const statusCode = upstreamResponse.status;
+
+          // 4xx: client error, don't failover
+          if (statusCode >= 400 && statusCode < 500) {
+            const latencyMs = Date.now() - startTime;
+            let parsedError: any;
+            try { parsedError = JSON.parse(errorText); } catch { parsedError = { error: { message: errorText } }; }
+            res.status(statusCode).json(parsedError);
+            logRequest({
+              apiTokenId: req.apiTokenId || null, userId: req.userId || null,
+              modelName, resolvedModel: model.name, method: 'POST',
+              path: '/v1/images/generations', statusCode, requestBody: req.body,
+              responseBody: errorText, inputTokens: null, outputTokens: null,
+              latencyMs, errorMessage: errorText,
+              userAgent: req.headers['user-agent'] || null, ipAddress: req.ip || null, stream: false,
+            }).catch(() => {});
+            return;
+          }
+
+          // 5xx: failover
+          lastError = `${statusCode}: ${errorText.slice(0, 200)}`;
+          await recordEndpointFailure(endpoint.endpointUrl);
+          continue;
+        }
+
+        // Parse upstream response
+        const upstreamData = await upstreamResponse.json() as {
+          created?: number;
+          data?: Array<{
+            url?: string;
+            b64_json?: string;
+            revised_prompt?: string;
+          }>;
+        };
+
+        if (!upstreamData.data || !Array.isArray(upstreamData.data) || upstreamData.data.length === 0) {
+          lastError = 'Upstream returned empty data';
+          await recordEndpointFailure(endpoint.endpointUrl);
+          continue;
+        }
+
+        // Process each image: save locally, rewrite to local URL
+        const reqHost = req.headers['host'] || undefined;
+        const reqProtocol = req.protocol || 'http';
+        const rewrittenData: Array<{ url: string; revised_prompt?: string }> = [];
+
+        for (const item of upstreamData.data) {
+          let imageBuffer: Buffer | null = null;
+          let mimeType = 'image/png';
+
+          if (item.b64_json) {
+            imageBuffer = Buffer.from(item.b64_json, 'base64');
+          } else if (item.url) {
+            // Download from upstream URL
+            try {
+              const dlResponse = await fetch(item.url);
+              if (dlResponse.ok) {
+                const contentType = dlResponse.headers.get('content-type');
+                if (contentType && contentType.startsWith('image/')) {
+                  mimeType = contentType.split(';')[0]!;
+                }
+                imageBuffer = Buffer.from(await dlResponse.arrayBuffer());
+              } else {
+                console.warn(`[ImageProxy] Failed to download upstream image: HTTP ${dlResponse.status}`);
+              }
+            } catch (dlError) {
+              console.error('[ImageProxy] Failed to download upstream image:', dlError);
+            }
+          }
+
+          if (!imageBuffer) {
+            // If we can't get the image, pass through upstream URL as fallback
+            rewrittenData.push({ url: item.url || '', revised_prompt: item.revised_prompt });
+            continue;
+          }
+
+          // Save locally
+          const saved = await saveImage(imageBuffer, {
+            mimeType,
+            modelId: model.id,
+            userId: req.userId || undefined,
+            apiTokenId: req.apiTokenId || undefined,
+            prompt,
+          });
+
+          rewrittenData.push({
+            url: buildImageUrl(saved.fileName, reqHost, reqProtocol),
+            revised_prompt: item.revised_prompt,
+          });
+        }
+
+        const latencyMs = Date.now() - startTime;
+
+        const responseBody = {
+          created: upstreamData.created || Math.floor(Date.now() / 1000),
+          data: rewrittenData,
+        };
+
+        res.json(responseBody);
+
+        await recordEndpointSuccess(endpoint.endpointUrl);
+
+        // Record usage (0 tokens for images, but track request count)
+        recordUsage({
+          userId: req.userId!,
+          loginid: req.user?.loginid || 'unknown',
+          modelId: model.id,
+          apiTokenId: req.apiTokenId || null,
+          inputTokens: 0,
+          outputTokens: 0,
+          latencyMs,
+          deptname: req.user?.deptname || '',
+          businessUnit: req.user?.businessUnit || null,
+        }).catch((err) => {
+          console.error('[Usage] Failed to record image usage:', err);
+        });
+
+        logRequest({
+          apiTokenId: req.apiTokenId || null, userId: req.userId || null,
+          modelName, resolvedModel: model.name, method: 'POST',
+          path: '/v1/images/generations', statusCode: 200, requestBody: req.body,
+          responseBody, inputTokens: 0, outputTokens: 0,
+          latencyMs, errorMessage: null,
+          userAgent: req.headers['user-agent'] || null, ipAddress: req.ip || null, stream: false,
+        }).catch(() => {});
+
+        return;
+
+      } catch (fetchError: any) {
+        if (fetchError.name === 'AbortError') {
+          lastError = 'Request timed out';
+        } else {
+          lastError = fetchError.message || 'Unknown fetch error';
+        }
+        await recordEndpointFailure(endpoint.endpointUrl);
+        continue;
+      }
+    }
+
+    // All endpoints failed
+    const latencyMs = Date.now() - startTime;
+    res.status(503).json({
+      error: { type: 'service_unavailable', message: `All ${endpoints.length} endpoint(s) failed. Please try again later.` },
+    });
+
+    logRequest({
+      apiTokenId: req.apiTokenId || null, userId: req.userId || null,
+      modelName, resolvedModel: model.name, method: 'POST',
+      path: '/v1/images/generations', statusCode: 503, requestBody: req.body,
+      responseBody: null, inputTokens: null, outputTokens: null,
+      latencyMs, errorMessage: lastError || 'All endpoints failed',
+      userAgent: req.headers['user-agent'] || null, ipAddress: req.ip || null, stream: false,
+    }).catch(() => {});
+
+  } catch (error) {
+    console.error('Image generation proxy error:', error);
+    const latencyMs = Date.now() - startTime;
+
+    if (!res.headersSent) {
+      res.status(500).json({ error: { type: 'server_error', message: 'Failed to process image generation request' } });
+    }
+
+    logRequest({
+      apiTokenId: req.apiTokenId || null, userId: req.userId || null,
+      modelName: req.body?.model || 'unknown', resolvedModel: null, method: 'POST',
+      path: '/v1/images/generations', statusCode: 500, requestBody: req.body,
+      responseBody: null, inputTokens: null, outputTokens: null,
+      latencyMs, errorMessage: error instanceof Error ? error.message : 'Unknown error',
+      userAgent: req.headers['user-agent'] || null, ipAddress: req.ip || null, stream: false,
+    }).catch(() => {});
+  }
+});
+
+/**
+ * GET /v1/images/files/:fileName
+ * Serve generated image files. No auth required (UUID is unguessable).
+ */
+proxyRoutes.get('/images/files/:fileName', async (req, res) => {
+  try {
+    const { fileName } = req.params;
+
+    if (!fileName || fileName.includes('..') || fileName.includes('/')) {
+      res.status(400).json({ error: { type: 'invalid_request_error', message: 'Invalid file name' } });
+      return;
+    }
+
+    // Check DB record exists and not expired
+    const record = await prisma.generatedImage.findUnique({
+      where: { fileName },
+      select: { mimeType: true, expiresAt: true },
+    });
+
+    if (!record) {
+      res.status(404).json({ error: { type: 'not_found', message: 'Image not found' } });
+      return;
+    }
+
+    if (record.expiresAt < new Date()) {
+      res.status(410).json({ error: { type: 'gone', message: 'Image has expired' } });
+      return;
+    }
+
+    const filePath = path.resolve(IMAGE_STORAGE_PATH, fileName);
+    res.setHeader('Content-Type', record.mimeType);
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.sendFile(filePath, (err) => {
+      if (err && !res.headersSent) {
+        console.error(`[ImageServe] Failed to send file ${fileName}:`, err);
+        res.status(404).json({ error: { type: 'not_found', message: 'Image file not found on disk' } });
+      }
+    });
+  } catch (error) {
+    console.error('Image file serve error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: { type: 'server_error', message: 'Failed to serve image' } });
+    }
   }
 });
 

@@ -74,6 +74,7 @@ enum ModelType {
   CHAT
   EMBEDDING
   RERANKING
+  IMAGE
 }
 
 model Model {
@@ -337,6 +338,27 @@ model Holiday {
 
   @@index([date])
   @@map("holidays")
+}
+
+// ============================================
+// Generated Image (for IMAGE model type)
+// ============================================
+model GeneratedImage {
+  id         String   @id @default(uuid())
+  fileName   String   @unique @map("file_name")
+  mimeType   String   @default("image/png") @map("mime_type")
+  sizeBytes  Int      @default(0) @map("size_bytes")
+  modelId    String?  @map("model_id")
+  userId     String?  @map("user_id")
+  apiTokenId String?  @map("api_token_id")
+  prompt     String?  @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+  expiresAt  DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@index([userId])
+  @@index([modelId])
+  @@map("generated_images")
 }
 
 // ============================================
