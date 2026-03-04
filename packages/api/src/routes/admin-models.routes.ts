@@ -498,7 +498,23 @@ async function testImageGeneration(
     }
 
     const firstResult = results[0]!;
-    const sizeKB = (firstResult.imageBuffer.length / 1024).toFixed(1);
+    const sizeBytes = firstResult.imageBuffer.length;
+    const sizeKB = (sizeBytes / 1024).toFixed(1);
+    const MIN_SIZE_BYTES = 60 * 1024; // 60KB
+
+    if (sizeBytes < MIN_SIZE_BYTES) {
+      console.error(`[ImageTest] FAIL | ${latencyMs}ms | Image too small: ${sizeKB}KB (minimum 60KB)`);
+      return {
+        imageGen: {
+          passed: false,
+          latencyMs,
+          message: `Image too small: ${sizeKB}KB (minimum 60KB) - 정상적인 이미지가 생성되지 않았을 수 있습니다`,
+          request: { provider, prompt: testPrompt },
+          response: { imageCount: results.length, sizeBytes, mimeType: firstResult.mimeType },
+        },
+        passed: false,
+      };
+    }
 
     console.log(`[ImageTest] PASS | ${latencyMs}ms | ${results.length} image(s) | ${sizeKB}KB | ${firstResult.mimeType}`);
     return {
@@ -507,7 +523,7 @@ async function testImageGeneration(
         latencyMs,
         message: `OK (${results.length} image(s), ${sizeKB}KB, ${firstResult.mimeType})`,
         request: { provider, prompt: testPrompt },
-        response: { imageCount: results.length, sizeBytes: firstResult.imageBuffer.length, mimeType: firstResult.mimeType },
+        response: { imageCount: results.length, sizeBytes, mimeType: firstResult.mimeType },
       },
       passed: true,
     };
