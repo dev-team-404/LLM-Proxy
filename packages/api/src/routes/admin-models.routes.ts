@@ -321,6 +321,141 @@ If the description captures at least 3 of these 4 elements, respond with exactly
 }
 
 // ============================================
+// Embedding Test
+// ============================================
+function normalizeEmbeddingsUrl(endpointUrl: string): string {
+  let url = endpointUrl.trim().replace(/\/+$/, '');
+  if (url.endsWith('/embeddings')) return url;
+  url = url.replace(/\/chat\/completions$/, '');
+  if (url.endsWith('/v1')) return `${url}/embeddings`;
+  return `${url}/v1/embeddings`;
+}
+
+async function testEmbedding(
+  endpointUrl: string,
+  apiKey?: string | null,
+  extraHeaders?: Record<string, string> | null,
+  modelName?: string | null
+): Promise<{ embedding: TestResult; passed: boolean }> {
+  const model = modelName || 'unknown';
+  const url = normalizeEmbeddingsUrl(endpointUrl);
+  const start = Date.now();
+  const body = { model, input: 'Hello world' };
+
+  console.log(`[EmbeddingTest] ========== 테스트 시작 | model=${model} | url=${url} ==========`);
+
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    if (extraHeaders) Object.assign(headers, extraHeaders);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
+    clearTimeout(timeout);
+
+    const latencyMs = Date.now() - start;
+    const rawText = await response.text().catch(() => '');
+    let responseBody: Record<string, any> | null = null;
+    try { responseBody = JSON.parse(rawText); } catch { /* keep null */ }
+
+    if (!response.ok) {
+      console.error(`[EmbeddingTest] FAIL | ${latencyMs}ms | HTTP ${response.status}`);
+      return { embedding: { passed: false, latencyMs, message: `HTTP ${response.status}: ${rawText.substring(0, 500)}`, statusCode: response.status, request: body, response: responseBody || rawText.substring(0, 1000) }, passed: false };
+    }
+
+    const embeddingData = responseBody?.data?.[0]?.embedding;
+    if (!Array.isArray(embeddingData) || embeddingData.length === 0) {
+      console.error(`[EmbeddingTest] FAIL | Invalid response structure`);
+      return { embedding: { passed: false, latencyMs, message: 'Response does not contain valid embedding (expected data[0].embedding as number array)', statusCode: response.status, request: body, response: responseBody || undefined }, passed: false };
+    }
+    if (typeof embeddingData[0] !== 'number') {
+      return { embedding: { passed: false, latencyMs, message: `Embedding values are not numbers (got ${typeof embeddingData[0]})`, statusCode: response.status, request: body, response: responseBody || undefined }, passed: false };
+    }
+
+    console.log(`[EmbeddingTest] PASS | ${latencyMs}ms | dim=${embeddingData.length}`);
+    return { embedding: { passed: true, latencyMs, message: `OK (dim=${embeddingData.length})`, statusCode: response.status, request: body, response: responseBody || undefined }, passed: true };
+  } catch (error) {
+    const latencyMs = Date.now() - start;
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[EmbeddingTest] ERROR | ${latencyMs}ms | ${msg}`);
+    return { embedding: { passed: false, latencyMs, message: msg, request: body }, passed: false };
+  }
+}
+
+// ============================================
+// Rerank Test
+// ============================================
+function normalizeRerankUrl(endpointUrl: string): string {
+  let url = endpointUrl.trim().replace(/\/+$/, '');
+  if (url.endsWith('/rerank')) return url;
+  url = url.replace(/\/chat\/completions$/, '');
+  if (url.endsWith('/v1')) return `${url}/rerank`;
+  return `${url}/v1/rerank`;
+}
+
+async function testRerank(
+  endpointUrl: string,
+  apiKey?: string | null,
+  extraHeaders?: Record<string, string> | null,
+  modelName?: string | null
+): Promise<{ rerank: TestResult; passed: boolean }> {
+  const model = modelName || 'unknown';
+  const url = normalizeRerankUrl(endpointUrl);
+  const start = Date.now();
+  const body = {
+    model,
+    query: 'What is machine learning?',
+    documents: [
+      'Machine learning is a subset of artificial intelligence that enables systems to learn from data.',
+      'The weather is nice today with clear skies.',
+    ],
+  };
+
+  console.log(`[RerankTest] ========== 테스트 시작 | model=${model} | url=${url} ==========`);
+
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    if (extraHeaders) Object.assign(headers, extraHeaders);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
+    clearTimeout(timeout);
+
+    const latencyMs = Date.now() - start;
+    const rawText = await response.text().catch(() => '');
+    let responseBody: Record<string, any> | null = null;
+    try { responseBody = JSON.parse(rawText); } catch { /* keep null */ }
+
+    if (!response.ok) {
+      console.error(`[RerankTest] FAIL | ${latencyMs}ms | HTTP ${response.status}`);
+      return { rerank: { passed: false, latencyMs, message: `HTTP ${response.status}: ${rawText.substring(0, 500)}`, statusCode: response.status, request: body, response: responseBody || rawText.substring(0, 1000) }, passed: false };
+    }
+
+    const results = responseBody?.results;
+    if (!Array.isArray(results) || results.length === 0) {
+      console.error(`[RerankTest] FAIL | Invalid response structure`);
+      return { rerank: { passed: false, latencyMs, message: 'Response does not contain valid results array', statusCode: response.status, request: body, response: responseBody || undefined }, passed: false };
+    }
+
+    const firstResult = results[0];
+    if (firstResult.relevance_score === undefined && firstResult.score === undefined) {
+      return { rerank: { passed: false, latencyMs, message: 'Results do not contain relevance_score or score field', statusCode: response.status, request: body, response: responseBody || undefined }, passed: false };
+    }
+
+    console.log(`[RerankTest] PASS | ${latencyMs}ms | results=${results.length}`);
+    return { rerank: { passed: true, latencyMs, message: `OK (${results.length} results)`, statusCode: response.status, request: body, response: responseBody || undefined }, passed: true };
+  } catch (error) {
+    const latencyMs = Date.now() - start;
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[RerankTest] ERROR | ${latencyMs}ms | ${msg}`);
+    return { rerank: { passed: false, latencyMs, message: msg, request: body }, passed: false };
+  }
+}
+
+// ============================================
 // Model CRUD
 // ============================================
 
@@ -359,6 +494,7 @@ adminModelsRoutes.post('/', requireWriteAccess, async (req: AuthenticatedRequest
       extraBody,
       maxTokens,
       enabled,
+      type,
     } = req.body as {
       name?: string;
       displayName?: string;
@@ -370,6 +506,7 @@ adminModelsRoutes.post('/', requireWriteAccess, async (req: AuthenticatedRequest
       extraBody?: Record<string, any>;
       maxTokens?: number;
       enabled?: boolean;
+      type?: 'CHAT' | 'EMBEDDING' | 'RERANKING';
     };
 
     if (!name || !displayName || !endpointUrl) {
@@ -408,6 +545,7 @@ adminModelsRoutes.post('/', requireWriteAccess, async (req: AuthenticatedRequest
         extraBody: extraBody || undefined,
         maxTokens: maxTokens ?? 128000,
         enabled: enabled ?? true,
+        type: type || 'CHAT',
         sortOrder: nextSortOrder,
         createdBy: req.adminId || undefined,
       },
@@ -489,6 +627,7 @@ adminModelsRoutes.put('/:id', requireWriteAccess, async (req: AuthenticatedReque
       extraBody,
       maxTokens,
       enabled,
+      type,
     } = req.body as {
       name?: string;
       displayName?: string;
@@ -500,6 +639,7 @@ adminModelsRoutes.put('/:id', requireWriteAccess, async (req: AuthenticatedReque
       extraBody?: Record<string, any> | null;
       maxTokens?: number;
       enabled?: boolean;
+      type?: 'CHAT' | 'EMBEDDING' | 'RERANKING';
     };
 
     const existing = await prisma.model.findUnique({ where: { id } });
@@ -539,6 +679,7 @@ adminModelsRoutes.put('/:id', requireWriteAccess, async (req: AuthenticatedReque
     if (extraBody !== undefined) data.extraBody = extraBody;
     if (maxTokens !== undefined) data.maxTokens = maxTokens;
     if (enabled !== undefined) data.enabled = enabled;
+    if (type !== undefined) data.type = type;
 
     const model = await prisma.model.update({
       where: { id },
@@ -674,6 +815,46 @@ adminModelsRoutes.post('/test-vl', requireWriteAccess, async (req: Authenticated
   } catch (error) {
     console.error('Error testing VL endpoint:', error);
     res.status(500).json({ error: 'Failed to test VL endpoint' });
+  }
+});
+
+/**
+ * POST /admin/models/test-embedding - Test embedding endpoint
+ */
+adminModelsRoutes.post('/test-embedding', requireWriteAccess, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { endpointUrl, apiKey, extraHeaders, modelName } = req.body as {
+      endpointUrl?: string;
+      apiKey?: string;
+      extraHeaders?: Record<string, string>;
+      modelName?: string;
+    };
+    if (!endpointUrl) { res.status(400).json({ error: 'endpointUrl is required' }); return; }
+    const result = await testEmbedding(endpointUrl, apiKey, extraHeaders, modelName);
+    res.json(result);
+  } catch (error) {
+    console.error('Error testing embedding endpoint:', error);
+    res.status(500).json({ error: 'Failed to test embedding endpoint' });
+  }
+});
+
+/**
+ * POST /admin/models/test-rerank - Test rerank endpoint
+ */
+adminModelsRoutes.post('/test-rerank', requireWriteAccess, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { endpointUrl, apiKey, extraHeaders, modelName } = req.body as {
+      endpointUrl?: string;
+      apiKey?: string;
+      extraHeaders?: Record<string, string>;
+      modelName?: string;
+    };
+    if (!endpointUrl) { res.status(400).json({ error: 'endpointUrl is required' }); return; }
+    const result = await testRerank(endpointUrl, apiKey, extraHeaders, modelName);
+    res.json(result);
+  } catch (error) {
+    console.error('Error testing rerank endpoint:', error);
+    res.status(500).json({ error: 'Failed to test rerank endpoint' });
   }
 });
 

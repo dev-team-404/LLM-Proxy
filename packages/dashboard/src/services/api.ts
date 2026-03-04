@@ -104,6 +104,12 @@ export const admin = {
     testVL: (data: { endpointUrl: string; apiKey?: string; extraHeaders?: Record<string, string>; modelName?: string }) =>
       api.post('/admin/models/test-vl', data, { timeout: 180000 }).then((r) => r.data),
 
+    testEmbedding: (data: { endpointUrl: string; apiKey?: string; extraHeaders?: Record<string, string>; modelName?: string }) =>
+      api.post('/admin/models/test-embedding', data, { timeout: 60000 }).then((r) => r.data),
+
+    testRerank: (data: { endpointUrl: string; apiKey?: string; extraHeaders?: Record<string, string>; modelName?: string }) =>
+      api.post('/admin/models/test-rerank', data, { timeout: 60000 }).then((r) => r.data),
+
     getSubModels: (modelId: string) =>
       api.get(`/admin/models/${modelId}/sub-models`).then((r) => r.data),
 

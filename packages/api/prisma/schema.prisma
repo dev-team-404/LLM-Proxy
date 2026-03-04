@@ -70,19 +70,26 @@ model ApiToken {
 // ============================================
 // LLM Model Configuration
 // ============================================
+enum ModelType {
+  CHAT
+  EMBEDDING
+  RERANKING
+}
+
 model Model {
-  id               String   @id @default(uuid())
-  name             String   @unique
-  displayName      String   @map("display_name")
-  alias            String?  @unique
-  upstreamModelName String? @map("upstream_model_name")
-  endpointUrl      String   @map("endpoint_url")
-  apiKey           String?  @map("api_key")
-  extraHeaders     Json?    @map("extra_headers")
-  extraBody        Json?    @map("extra_body")
-  maxTokens        Int      @default(128000) @map("max_tokens")
-  enabled          Boolean  @default(true)
-  sortOrder        Int      @default(0) @map("sort_order")
+  id               String    @id @default(uuid())
+  name             String    @unique
+  displayName      String    @map("display_name")
+  alias            String?   @unique
+  upstreamModelName String?  @map("upstream_model_name")
+  endpointUrl      String    @map("endpoint_url")
+  apiKey           String?   @map("api_key")
+  extraHeaders     Json?     @map("extra_headers")
+  extraBody        Json?     @map("extra_body")
+  maxTokens        Int       @default(128000) @map("max_tokens")
+  enabled          Boolean   @default(true)
+  type             ModelType @default(CHAT)
+  sortOrder        Int       @default(0) @map("sort_order")
   createdAt        DateTime @default(now()) @map("created_at")
   createdBy        String?  @map("created_by")
 
