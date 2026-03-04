@@ -110,7 +110,7 @@ export const admin = {
     testRerank: (data: { endpointUrl: string; apiKey?: string; extraHeaders?: Record<string, string>; modelName?: string }) =>
       api.post('/admin/models/test-rerank', data, { timeout: 60000 }).then((r) => r.data),
 
-    testImage: (data: { endpointUrl: string; apiKey?: string; extraHeaders?: Record<string, string>; modelName?: string }) =>
+    testImage: (data: { endpointUrl: string; apiKey?: string; extraHeaders?: Record<string, string>; modelName?: string; imageProvider?: string; extraBody?: Record<string, any> }) =>
       api.post('/admin/models/test-image', data, { timeout: 120000 }).then((r) => r.data),
 
     getSubModels: (modelId: string) =>

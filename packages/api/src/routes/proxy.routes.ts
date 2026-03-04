@@ -17,6 +17,7 @@ import { logRequest } from '../services/requestLog.service.js';
 import { isEndpointAvailable, recordEndpointSuccess, recordEndpointFailure } from '../services/circuitBreaker.service.js';
 import { recordTokenRateLimit } from '../middleware/rateLimiter.js';
 import { saveImage, buildImageUrl, IMAGE_STORAGE_PATH } from '../services/imageStorage.service.js';
+import { generateImages, ImageEndpointInfo } from '../services/imageProviders.service.js';
 
 export const proxyRoutes = Router();
 
@@ -36,6 +37,7 @@ interface EndpointInfo {
   modelName: string;
   extraHeaders: Record<string, string> | null;
   extraBody: Record<string, any> | null;
+  imageProvider?: string | null;
 }
 
 // ============================================
@@ -62,7 +64,7 @@ async function getModelEndpoints(modelId: string, parentEndpoint: EndpointInfo):
   const subModels = await prisma.subModel.findMany({
     where: { parentId: modelId, enabled: true },
     orderBy: { sortOrder: 'asc' },
-    select: { endpointUrl: true, apiKey: true, modelName: true, extraHeaders: true, extraBody: true },
+    select: { endpointUrl: true, apiKey: true, modelName: true, extraHeaders: true, extraBody: true, imageProvider: true },
   });
 
   if (subModels.length === 0) {
@@ -77,6 +79,7 @@ async function getModelEndpoints(modelId: string, parentEndpoint: EndpointInfo):
       modelName: s.modelName || parentEndpoint.modelName,
       extraHeaders: s.extraHeaders as Record<string, string> | null,
       extraBody: s.extraBody as Record<string, any> | null,
+      imageProvider: s.imageProvider || parentEndpoint.imageProvider,
     })),
   ];
 }
@@ -146,24 +149,7 @@ function buildRerankUrl(endpointUrl: string): string {
   return `${url}/rerank`;
 }
 
-/**
- * Build the /images/generations URL from an endpoint base URL.
- */
-function buildImagesGenerationsUrl(endpointUrl: string): string {
-  let url = endpointUrl.trim();
-  if (url.endsWith('/images/generations')) return url;
-  if (url.endsWith('/')) url = url.slice(0, -1);
-  if (url.endsWith('/v1')) return `${url}/images/generations`;
-  // Strip known suffixes
-  if (url.endsWith('/chat/completions')) {
-    url = url.replace(/\/chat\/completions$/, '');
-  } else if (url.endsWith('/embeddings')) {
-    url = url.replace(/\/embeddings$/, '');
-  } else if (url.endsWith('/rerank')) {
-    url = url.replace(/\/rerank$/, '');
-  }
-  return `${url}/images/generations`;
-}
+// buildImagesGenerationsUrl moved to imageProviders.service.ts (OPENAI adapter)
 
 /**
  * Check if the error is a max_tokens "must be at least" error.
@@ -1558,6 +1544,7 @@ proxyRoutes.post('/images/generations', authenticateApiToken, checkRateLimit, as
       modelName: model.upstreamModelName || model.name,
       extraHeaders: model.extraHeaders as Record<string, string> | null,
       extraBody: model.extraBody as Record<string, any> | null,
+      imageProvider: model.imageProvider || null,
     });
     const startIdx = await getRoundRobinIndex(model.id, endpoints.length);
 
@@ -1576,115 +1563,33 @@ proxyRoutes.post('/images/generations', authenticateApiToken, checkRateLimit, as
         console.log(`[Failover] Model "${model.name}" trying endpoint ${attempt + 1}/${endpoints.length}: ${endpoint.endpointUrl}`);
       }
 
-      const upstreamUrl = buildImagesGenerationsUrl(endpoint.endpointUrl);
-      const headers = buildHeaders(endpoint);
-
-      const requestBody: Record<string, any> = {
-        model: endpoint.modelName,
-        prompt,
-        ...(endpoint.extraBody || {}),
-        ...otherParams,
-      };
-      if (n) requestBody.n = n;
-      if (size) requestBody.size = size;
-      if (quality) requestBody.quality = quality;
-      if (style) requestBody.style = style;
-      // Try to get base64 for local storage, but accept whatever format comes back
-      requestBody.response_format = response_format || 'b64_json';
+      const provider = endpoint.imageProvider || 'OPENAI';
 
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-        const upstreamResponse = await fetch(upstreamUrl, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(requestBody),
-          signal: controller.signal,
+        // Use provider-specific adapter to generate images
+        const providerResults = await generateImages(provider, {
+          endpointUrl: endpoint.endpointUrl,
+          apiKey: endpoint.apiKey,
+          modelName: endpoint.modelName,
+          extraHeaders: endpoint.extraHeaders,
+          extraBody: endpoint.extraBody,
+        }, {
+          prompt,
+          n: n || undefined,
+          size: size || undefined,
+          quality: quality || undefined,
+          style: style || undefined,
+          negativePrompt: otherParams.negative_prompt || undefined,
         });
-        clearTimeout(timeoutId);
 
-        if (!upstreamResponse.ok) {
-          const errorText = await upstreamResponse.text();
-          const statusCode = upstreamResponse.status;
-
-          // 4xx: client error, don't failover
-          if (statusCode >= 400 && statusCode < 500) {
-            const latencyMs = Date.now() - startTime;
-            let parsedError: any;
-            try { parsedError = JSON.parse(errorText); } catch { parsedError = { error: { message: errorText } }; }
-            res.status(statusCode).json(parsedError);
-            logRequest({
-              apiTokenId: req.apiTokenId || null, userId: req.userId || null,
-              modelName, resolvedModel: model.name, method: 'POST',
-              path: '/v1/images/generations', statusCode, requestBody: req.body,
-              responseBody: errorText, inputTokens: null, outputTokens: null,
-              latencyMs, errorMessage: errorText,
-              userAgent: req.headers['user-agent'] || null, ipAddress: req.ip || null, stream: false,
-            }).catch(() => {});
-            return;
-          }
-
-          // 5xx: failover
-          lastError = `${statusCode}: ${errorText.slice(0, 200)}`;
-          await recordEndpointFailure(endpoint.endpointUrl);
-          continue;
-        }
-
-        // Parse upstream response
-        const upstreamData = await upstreamResponse.json() as {
-          created?: number;
-          data?: Array<{
-            url?: string;
-            b64_json?: string;
-            revised_prompt?: string;
-          }>;
-        };
-
-        if (!upstreamData.data || !Array.isArray(upstreamData.data) || upstreamData.data.length === 0) {
-          lastError = 'Upstream returned empty data';
-          await recordEndpointFailure(endpoint.endpointUrl);
-          continue;
-        }
-
-        // Process each image: save locally, rewrite to local URL
+        // Save each image locally, rewrite to local URL
         const reqHost = req.headers['host'] || undefined;
         const reqProtocol = req.protocol || 'http';
         const rewrittenData: Array<{ url: string; revised_prompt?: string }> = [];
 
-        for (const item of upstreamData.data) {
-          let imageBuffer: Buffer | null = null;
-          let mimeType = 'image/png';
-
-          if (item.b64_json) {
-            imageBuffer = Buffer.from(item.b64_json, 'base64');
-          } else if (item.url) {
-            // Download from upstream URL
-            try {
-              const dlResponse = await fetch(item.url);
-              if (dlResponse.ok) {
-                const contentType = dlResponse.headers.get('content-type');
-                if (contentType && contentType.startsWith('image/')) {
-                  mimeType = contentType.split(';')[0]!;
-                }
-                imageBuffer = Buffer.from(await dlResponse.arrayBuffer());
-              } else {
-                console.warn(`[ImageProxy] Failed to download upstream image: HTTP ${dlResponse.status}`);
-              }
-            } catch (dlError) {
-              console.error('[ImageProxy] Failed to download upstream image:', dlError);
-            }
-          }
-
-          if (!imageBuffer) {
-            // If we can't get the image, pass through upstream URL as fallback
-            rewrittenData.push({ url: item.url || '', revised_prompt: item.revised_prompt });
-            continue;
-          }
-
-          // Save locally
-          const saved = await saveImage(imageBuffer, {
-            mimeType,
+        for (const result of providerResults) {
+          const saved = await saveImage(result.imageBuffer, {
+            mimeType: result.mimeType,
             modelId: model.id,
             userId: req.userId || undefined,
             apiTokenId: req.apiTokenId || undefined,
@@ -1693,14 +1598,14 @@ proxyRoutes.post('/images/generations', authenticateApiToken, checkRateLimit, as
 
           rewrittenData.push({
             url: buildImageUrl(saved.fileName, reqHost, reqProtocol),
-            revised_prompt: item.revised_prompt,
+            revised_prompt: result.revisedPrompt,
           });
         }
 
         const latencyMs = Date.now() - startTime;
 
         const responseBody = {
-          created: upstreamData.created || Math.floor(Date.now() / 1000),
+          created: Math.floor(Date.now() / 1000),
           data: rewrittenData,
         };
 
@@ -1735,11 +1640,9 @@ proxyRoutes.post('/images/generations', authenticateApiToken, checkRateLimit, as
         return;
 
       } catch (fetchError: any) {
-        if (fetchError.name === 'AbortError') {
-          lastError = 'Request timed out';
-        } else {
-          lastError = fetchError.message || 'Unknown fetch error';
-        }
+        const errMsg = fetchError.message || 'Unknown error';
+        console.error(`[ImageProxy] Provider ${provider} failed for ${endpoint.endpointUrl}: ${errMsg}`);
+        lastError = errMsg;
         await recordEndpointFailure(endpoint.endpointUrl);
         continue;
       }
@@ -1748,7 +1651,7 @@ proxyRoutes.post('/images/generations', authenticateApiToken, checkRateLimit, as
     // All endpoints failed
     const latencyMs = Date.now() - startTime;
     res.status(503).json({
-      error: { type: 'service_unavailable', message: `All ${endpoints.length} endpoint(s) failed. Please try again later.` },
+      error: { type: 'service_unavailable', message: `All ${endpoints.length} endpoint(s) failed. Last error: ${lastError || 'unknown'}` },
     });
 
     logRequest({

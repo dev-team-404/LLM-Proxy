@@ -38,11 +38,14 @@ interface SubModel {
   apiKey?: string;
   extraHeaders?: Record<string, string>;
   extraBody?: Record<string, any>;
+  imageProvider?: string;
   sortOrder: number;
   enabled: boolean;
 }
 
 type ModelType = 'CHAT' | 'EMBEDDING' | 'RERANKING' | 'IMAGE';
+
+type ImageProvider = 'OPENAI' | 'COMFYUI' | 'GEMINI' | 'PIXABAY' | 'PEXELS';
 
 interface Model {
   id: string;
@@ -59,6 +62,7 @@ interface Model {
   isHealthy?: boolean;
   sortOrder?: number;
   type?: ModelType;
+  imageProvider?: string;
 }
 
 interface ModelFormData {
@@ -73,6 +77,7 @@ interface ModelFormData {
   maxTokens: string;
   enabled: boolean;
   type: ModelType;
+  imageProvider: ImageProvider;
 }
 
 interface SubModelFormData {
@@ -83,6 +88,7 @@ interface SubModelFormData {
   extraBody: string;
   enabled: boolean;
   sortOrder: string;
+  imageProvider: ImageProvider;
 }
 
 const emptyForm: ModelFormData = {
@@ -97,6 +103,7 @@ const emptyForm: ModelFormData = {
   maxTokens: '',
   enabled: true,
   type: 'CHAT',
+  imageProvider: 'OPENAI',
 };
 
 const emptySubModelForm: SubModelFormData = {
@@ -107,6 +114,7 @@ const emptySubModelForm: SubModelFormData = {
   extraBody: '{}',
   enabled: true,
   sortOrder: '0',
+  imageProvider: 'OPENAI',
 };
 
 function TestResultDisplay({ label, result }: { label: string; result?: TestResult }) {
@@ -331,6 +339,8 @@ function ModelDialog({
         modelName: form.upstreamModelName || form.name,
         apiKey: form.apiKey || undefined,
         extraHeaders: form.extraHeaders ? JSON.parse(form.extraHeaders) : undefined,
+        imageProvider: form.imageProvider || 'OPENAI',
+        extraBody: form.extraBody ? JSON.parse(form.extraBody) : undefined,
       });
       setImageTestResult(result);
     } catch {
@@ -370,7 +380,7 @@ function ModelDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-6 border-b">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
@@ -448,6 +458,32 @@ function ModelDialog({
               {form.type === 'IMAGE' && 'Image Generation API 테스트를 진행합니다.'}
             </p>
           </div>
+          {form.type === 'IMAGE' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Image Provider *</label>
+              <select
+                value={form.imageProvider}
+                onChange={(e) => {
+                  setForm({ ...form, imageProvider: e.target.value as ImageProvider });
+                  setImageTestResult(null);
+                }}
+                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none"
+              >
+                <option value="OPENAI">OpenAI (DALL-E 3 등)</option>
+                <option value="COMFYUI">ComfyUI (Workflow 기반)</option>
+                <option value="GEMINI">Google Gemini</option>
+                <option value="PIXABAY">Pixabay (Stock Photo)</option>
+                <option value="PEXELS">Pexels (Stock Photo)</option>
+              </select>
+              <p className="mt-1 text-xs text-gray-400">
+                {form.imageProvider === 'OPENAI' && 'OpenAI /v1/images/generations 호환 API'}
+                {form.imageProvider === 'COMFYUI' && 'ComfyUI 서버 (Extra Body에 workflow JSON 필요)'}
+                {form.imageProvider === 'GEMINI' && 'Google Gemini generateContent API (API Key 필요)'}
+                {form.imageProvider === 'PIXABAY' && 'Pixabay 이미지 검색 API (API Key 필요)'}
+                {form.imageProvider === 'PEXELS' && 'Pexels 이미지 검색 API (API Key 필요)'}
+              </p>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">엔드포인트 URL *</label>
             <input
@@ -456,13 +492,25 @@ function ModelDialog({
               value={form.endpointUrl}
               onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })}
               className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none"
-              placeholder="https://api.openai.com/v1"
+              placeholder={
+                form.type === 'IMAGE'
+                  ? form.imageProvider === 'COMFYUI' ? 'http://genai.samsungds.net:8188'
+                  : form.imageProvider === 'GEMINI' ? 'https://generativelanguage.googleapis.com'
+                  : form.imageProvider === 'PIXABAY' ? 'https://pixabay.com/api'
+                  : form.imageProvider === 'PEXELS' ? 'https://api.pexels.com'
+                  : 'https://api.openai.com/v1'
+                : 'https://api.openai.com/v1'
+              }
             />
             <p className="mt-1 text-xs text-gray-400">
               {form.type === 'CHAT' && 'v1/ 또는 v1/chat/completions 형식 모두 사용 가능'}
               {form.type === 'EMBEDDING' && 'v1/ 또는 v1/embeddings 형식 모두 사용 가능'}
               {form.type === 'RERANKING' && 'v1/ 또는 v1/rerank 형식 모두 사용 가능'}
-              {form.type === 'IMAGE' && 'v1/ 또는 v1/images/generations 형식 모두 사용 가능'}
+              {form.type === 'IMAGE' && form.imageProvider === 'COMFYUI' && 'ComfyUI 서버 주소 (포트 포함)'}
+              {form.type === 'IMAGE' && form.imageProvider === 'GEMINI' && 'Google AI API 베이스 URL'}
+              {form.type === 'IMAGE' && form.imageProvider === 'PIXABAY' && 'Pixabay API 베이스 URL'}
+              {form.type === 'IMAGE' && form.imageProvider === 'PEXELS' && 'Pexels API 베이스 URL'}
+              {form.type === 'IMAGE' && form.imageProvider === 'OPENAI' && 'v1/ 또는 v1/images/generations 형식 모두 사용 가능'}
             </p>
           </div>
           <div>
@@ -771,6 +819,8 @@ function SubModelDialog({
     modelName: form.modelName || parentModel.upstreamModelName || parentModel.name,
     apiKey: form.apiKey || parentModel.apiKey || undefined,
     extraHeaders: form.extraHeaders ? JSON.parse(form.extraHeaders) : parentModel.extraHeaders || undefined,
+    imageProvider: form.imageProvider || parentModel.imageProvider || 'OPENAI',
+    extraBody: form.extraBody ? JSON.parse(form.extraBody) : parentModel.extraBody || undefined,
   });
 
   const runTest = async () => {
@@ -873,7 +923,7 @@ function SubModelDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-6 border-b">
           <div>
             <h2 className="text-lg font-semibold">서브모델 추가</h2>
@@ -894,6 +944,25 @@ function SubModelDialog({
               placeholder={`비워두면 "${parentModel.name}" 사용`}
             />
           </div>
+          {parentType === 'IMAGE' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Image Provider</label>
+              <select
+                value={form.imageProvider}
+                onChange={(e) => {
+                  setForm({ ...form, imageProvider: e.target.value as ImageProvider });
+                  setImageTestResult(null);
+                }}
+                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none"
+              >
+                <option value="OPENAI">OpenAI (DALL-E 3 등)</option>
+                <option value="COMFYUI">ComfyUI (Workflow 기반)</option>
+                <option value="GEMINI">Google Gemini</option>
+                <option value="PIXABAY">Pixabay (Stock Photo)</option>
+                <option value="PEXELS">Pexels (Stock Photo)</option>
+              </select>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">엔드포인트 URL *</label>
             <input
@@ -908,6 +977,7 @@ function SubModelDialog({
               {parentType === 'EMBEDDING' && 'v1/ 또는 v1/embeddings 형식 모두 사용 가능'}
               {parentType === 'RERANKING' && 'v1/ 또는 v1/rerank 형식 모두 사용 가능'}
               {parentType === 'CHAT' && 'v1/ 또는 v1/chat/completions 형식 모두 사용 가능'}
+              {parentType === 'IMAGE' && 'Provider에 맞는 엔드포인트 URL 입력'}
             </p>
           </div>
           <div>
@@ -1220,6 +1290,7 @@ export default function AdminModels() {
         maxTokens: formData.maxTokens ? parseInt(formData.maxTokens) : undefined,
         enabled: formData.enabled,
         type: formData.type,
+        imageProvider: formData.type === 'IMAGE' ? formData.imageProvider : null,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'models'] });
@@ -1242,6 +1313,7 @@ export default function AdminModels() {
         maxTokens: formData.maxTokens ? parseInt(formData.maxTokens) : undefined,
         enabled: formData.enabled,
         type: formData.type,
+        imageProvider: formData.type === 'IMAGE' ? formData.imageProvider : null,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'models'] });
@@ -1279,7 +1351,11 @@ export default function AdminModels() {
       switch (model.type) {
         case 'EMBEDDING': return api.admin.models.testEmbedding(params);
         case 'RERANKING': return api.admin.models.testRerank(params);
-        case 'IMAGE': return api.admin.models.testImage(params);
+        case 'IMAGE': return api.admin.models.testImage({
+          ...params,
+          imageProvider: model.imageProvider || 'OPENAI',
+          extraBody: model.extraBody || undefined,
+        });
         default: return api.admin.models.test(params);
       }
     },
@@ -1343,6 +1419,7 @@ export default function AdminModels() {
         extraBody: data.extraBody ? JSON.parse(data.extraBody) : undefined,
         enabled: data.enabled,
         sortOrder: data.sortOrder ? parseInt(data.sortOrder) : undefined,
+        imageProvider: data.imageProvider || undefined,
       }),
     onSuccess: (_, { modelId }) => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'models', 'subModels', modelId] });
@@ -1469,6 +1546,7 @@ export default function AdminModels() {
             maxTokens: editModel.maxTokens?.toString() || '',
             enabled: editModel.enabled,
             type: editModel.type || 'CHAT',
+            imageProvider: (editModel.imageProvider as ImageProvider) || 'OPENAI',
           }}
           title="모델 수정"
           loading={updateMut.isPending}
@@ -1570,8 +1648,13 @@ function ModelRow({
           }`}>
             {model.type === 'EMBEDDING' ? 'Embedding' :
              model.type === 'RERANKING' ? 'Reranking' :
-             model.type === 'IMAGE' ? 'Image' : 'Chat'}
+             model.type === 'IMAGE' ? `Image` : 'Chat'}
           </span>
+          {model.type === 'IMAGE' && model.imageProvider && model.imageProvider !== 'OPENAI' && (
+            <span className="ml-1 inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-pink-50 text-pink-600">
+              {model.imageProvider}
+            </span>
+          )}
         </td>
         <td className="py-3 px-4 text-xs font-mono text-gray-500 max-w-[200px] truncate">{model.endpointUrl}</td>
         <td className="py-3 px-4 text-gray-600">{model.type === 'CHAT' || !model.type ? (model.maxTokens ?? '-') : '-'}</td>

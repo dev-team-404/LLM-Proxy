@@ -456,79 +456,66 @@ async function testRerank(
 }
 
 // ============================================
-// Image Generation Test
+// Image Generation Test (Provider-aware)
 // ============================================
-function normalizeImagesUrl(endpointUrl: string): string {
-  let url = endpointUrl.trim().replace(/\/+$/, '');
-  if (url.endsWith('/images/generations')) return url;
-  url = url.replace(/\/chat\/completions$/, '').replace(/\/embeddings$/, '').replace(/\/rerank$/, '');
-  if (url.endsWith('/v1')) return `${url}/images/generations`;
-  return `${url}/images/generations`;
-}
+import { generateImages, ImageEndpointInfo } from '../services/imageProviders.service.js';
 
 async function testImageGeneration(
   endpointUrl: string,
   apiKey?: string | null,
   extraHeaders?: Record<string, string> | null,
   modelName?: string | null,
+  imageProvider?: string | null,
+  extraBody?: Record<string, any> | null,
 ): Promise<{ imageGen: TestResult; passed: boolean }> {
   const model = modelName || 'unknown';
-  const url = normalizeImagesUrl(endpointUrl);
+  const provider = (imageProvider || 'OPENAI').toUpperCase();
   const start = Date.now();
-  const body = {
-    model,
-    prompt: 'A simple red circle on a white background',
-    n: 1,
-    size: '1024x1024',
-  };
+  const testPrompt = 'A simple red circle on a white background';
 
-  console.log(`[ImageTest] ========== 테스트 시작 | model=${model} | url=${url} ==========`);
+  console.log(`[ImageTest] ========== 테스트 시작 | provider=${provider} | model=${model} | url=${endpointUrl} ==========`);
 
   try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-    if (extraHeaders) Object.assign(headers, extraHeaders);
+    const endpoint: ImageEndpointInfo = {
+      endpointUrl,
+      apiKey: apiKey || null,
+      modelName: model,
+      extraHeaders: extraHeaders || null,
+      extraBody: extraBody || null,
+    };
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120000);
-    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
-    clearTimeout(timeout);
+    const results = await generateImages(provider, endpoint, {
+      prompt: testPrompt,
+      n: 1,
+      size: '1024x1024',
+    });
 
     const latencyMs = Date.now() - start;
-    const rawText = await response.text().catch(() => '');
-    let responseBody: Record<string, any> | null = null;
-    try { responseBody = JSON.parse(rawText); } catch { /* keep null */ }
 
-    if (!response.ok) {
-      console.error(`[ImageTest] FAIL | ${latencyMs}ms | HTTP ${response.status}`);
-      return { imageGen: { passed: false, latencyMs, message: `HTTP ${response.status}: ${rawText.substring(0, 500)}`, statusCode: response.status, request: body, response: responseBody || rawText.substring(0, 1000) }, passed: false };
+    if (results.length === 0) {
+      console.error(`[ImageTest] FAIL | ${latencyMs}ms | No images returned`);
+      return { imageGen: { passed: false, latencyMs, message: 'No images returned from provider', request: { provider, prompt: testPrompt } }, passed: false };
     }
 
-    // Validate: data array with url or b64_json
-    const data = responseBody?.data;
-    if (!Array.isArray(data) || data.length === 0) {
-      console.error(`[ImageTest] FAIL | Invalid response structure`);
-      return { imageGen: { passed: false, latencyMs, message: 'Response does not contain valid data array', statusCode: response.status, request: body, response: responseBody || undefined }, passed: false };
-    }
+    const firstResult = results[0]!;
+    const sizeKB = (firstResult.imageBuffer.length / 1024).toFixed(1);
 
-    const first = data[0];
-    if (!first.url && !first.b64_json) {
-      return { imageGen: { passed: false, latencyMs, message: 'data[0] has neither url nor b64_json', statusCode: response.status, request: body, response: responseBody || undefined }, passed: false };
-    }
-
-    // Truncate b64_json for logging
-    const logResponse = responseBody ? JSON.parse(JSON.stringify(responseBody, (key, value) => {
-      if (key === 'b64_json' && typeof value === 'string') return value.substring(0, 40) + '...[truncated]';
-      return value;
-    })) : undefined;
-
-    console.log(`[ImageTest] PASS | ${latencyMs}ms | images=${data.length}`);
-    return { imageGen: { passed: true, latencyMs, message: `OK (${data.length} image(s) generated)`, statusCode: response.status, request: body, response: logResponse }, passed: true };
+    console.log(`[ImageTest] PASS | ${latencyMs}ms | ${results.length} image(s) | ${sizeKB}KB | ${firstResult.mimeType}`);
+    return {
+      imageGen: {
+        passed: true,
+        latencyMs,
+        message: `OK (${results.length} image(s), ${sizeKB}KB, ${firstResult.mimeType})`,
+        request: { provider, prompt: testPrompt },
+        response: { imageCount: results.length, sizeBytes: firstResult.imageBuffer.length, mimeType: firstResult.mimeType },
+      },
+      passed: true,
+    };
   } catch (error) {
     const latencyMs = Date.now() - start;
     const msg = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[ImageTest] ERROR | ${latencyMs}ms | ${msg}`);
-    return { imageGen: { passed: false, latencyMs, message: msg, request: body }, passed: false };
+    return { imageGen: { passed: false, latencyMs, message: msg, request: { provider, prompt: testPrompt } }, passed: false };
   }
 }
 
@@ -572,6 +559,7 @@ adminModelsRoutes.post('/', requireWriteAccess, async (req: AuthenticatedRequest
       maxTokens,
       enabled,
       type,
+      imageProvider,
     } = req.body as {
       name?: string;
       displayName?: string;
@@ -584,6 +572,7 @@ adminModelsRoutes.post('/', requireWriteAccess, async (req: AuthenticatedRequest
       maxTokens?: number;
       enabled?: boolean;
       type?: 'CHAT' | 'EMBEDDING' | 'RERANKING' | 'IMAGE';
+      imageProvider?: string;
     };
 
     if (!name || !displayName || !endpointUrl) {
@@ -623,6 +612,7 @@ adminModelsRoutes.post('/', requireWriteAccess, async (req: AuthenticatedRequest
         maxTokens: maxTokens ?? 128000,
         enabled: enabled ?? true,
         type: type || 'CHAT',
+        imageProvider: type === 'IMAGE' ? (imageProvider || 'OPENAI') : undefined,
         sortOrder: nextSortOrder,
         createdBy: req.adminId || undefined,
       },
@@ -705,6 +695,7 @@ adminModelsRoutes.put('/:id', requireWriteAccess, async (req: AuthenticatedReque
       maxTokens,
       enabled,
       type,
+      imageProvider,
     } = req.body as {
       name?: string;
       displayName?: string;
@@ -717,6 +708,7 @@ adminModelsRoutes.put('/:id', requireWriteAccess, async (req: AuthenticatedReque
       maxTokens?: number;
       enabled?: boolean;
       type?: 'CHAT' | 'EMBEDDING' | 'RERANKING' | 'IMAGE';
+      imageProvider?: string | null;
     };
 
     const existing = await prisma.model.findUnique({ where: { id } });
@@ -757,6 +749,7 @@ adminModelsRoutes.put('/:id', requireWriteAccess, async (req: AuthenticatedReque
     if (maxTokens !== undefined) data.maxTokens = maxTokens;
     if (enabled !== undefined) data.enabled = enabled;
     if (type !== undefined) data.type = type;
+    if (imageProvider !== undefined) data.imageProvider = imageProvider;
 
     const model = await prisma.model.update({
       where: { id },
@@ -940,14 +933,16 @@ adminModelsRoutes.post('/test-rerank', requireWriteAccess, async (req: Authentic
  */
 adminModelsRoutes.post('/test-image', requireWriteAccess, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { endpointUrl, apiKey, extraHeaders, modelName } = req.body as {
+    const { endpointUrl, apiKey, extraHeaders, modelName, imageProvider, extraBody } = req.body as {
       endpointUrl?: string;
       apiKey?: string;
       extraHeaders?: Record<string, string>;
       modelName?: string;
+      imageProvider?: string;
+      extraBody?: Record<string, any>;
     };
     if (!endpointUrl) { res.status(400).json({ error: 'endpointUrl is required' }); return; }
-    const result = await testImageGeneration(endpointUrl, apiKey, extraHeaders, modelName);
+    const result = await testImageGeneration(endpointUrl, apiKey, extraHeaders, modelName, imageProvider, extraBody);
     res.json(result);
   } catch (error) {
     console.error('Error testing image generation endpoint:', error);
@@ -990,7 +985,7 @@ adminModelsRoutes.get('/:modelId/sub-models', async (req: AuthenticatedRequest, 
 adminModelsRoutes.post('/:modelId/sub-models', requireWriteAccess, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { modelId } = req.params;
-    const { modelName, endpointUrl, apiKey, extraHeaders, extraBody, enabled, sortOrder } = req.body as {
+    const { modelName, endpointUrl, apiKey, extraHeaders, extraBody, enabled, sortOrder, imageProvider } = req.body as {
       modelName?: string;
       endpointUrl?: string;
       apiKey?: string;
@@ -998,6 +993,7 @@ adminModelsRoutes.post('/:modelId/sub-models', requireWriteAccess, async (req: A
       extraBody?: Record<string, any>;
       enabled?: boolean;
       sortOrder?: number;
+      imageProvider?: string;
     };
 
     const model = await prisma.model.findUnique({ where: { id: modelId } });
@@ -1030,6 +1026,7 @@ adminModelsRoutes.post('/:modelId/sub-models', requireWriteAccess, async (req: A
         apiKey: apiKey || undefined,
         extraHeaders: extraHeaders || undefined,
         extraBody: extraBody || undefined,
+        imageProvider: model.type === 'IMAGE' ? (imageProvider || model.imageProvider || 'OPENAI') : undefined,
         enabled: enabled ?? true,
         sortOrder: finalSortOrder,
       },
@@ -1060,7 +1057,7 @@ adminModelsRoutes.post('/:modelId/sub-models', requireWriteAccess, async (req: A
 adminModelsRoutes.put('/:modelId/sub-models/:subId', requireWriteAccess, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { modelId, subId } = req.params;
-    const { modelName, endpointUrl, apiKey, extraHeaders, extraBody, enabled, sortOrder } = req.body as {
+    const { modelName, endpointUrl, apiKey, extraHeaders, extraBody, enabled, sortOrder, imageProvider } = req.body as {
       modelName?: string | null;
       endpointUrl?: string;
       apiKey?: string | null;
@@ -1068,6 +1065,7 @@ adminModelsRoutes.put('/:modelId/sub-models/:subId', requireWriteAccess, async (
       extraBody?: Record<string, any> | null;
       enabled?: boolean;
       sortOrder?: number;
+      imageProvider?: string | null;
     };
 
     const existing = await prisma.subModel.findFirst({
@@ -1086,6 +1084,7 @@ adminModelsRoutes.put('/:modelId/sub-models/:subId', requireWriteAccess, async (
     if (extraBody !== undefined) data.extraBody = extraBody;
     if (enabled !== undefined) data.enabled = enabled;
     if (sortOrder !== undefined) data.sortOrder = sortOrder;
+    if (imageProvider !== undefined) data.imageProvider = imageProvider;
 
     const subModel = await prisma.subModel.update({
       where: { id: subId },
