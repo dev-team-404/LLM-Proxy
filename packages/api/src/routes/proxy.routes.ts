@@ -25,7 +25,8 @@ export const proxyRoutes = Router();
 // Constants
 // ============================================
 
-const REQUEST_TIMEOUT_MS = 120000; // 2 minutes
+const REQUEST_TIMEOUT_MS = 600000; // 10 minutes
+const EMBEDDING_TIMEOUT_MS = 600000; // 10 minutes — large batch embeddings need much more time
 
 // ============================================
 // Types
@@ -1017,7 +1018,7 @@ proxyRoutes.post('/embeddings', authenticateApiToken, checkRateLimit, async (req
 
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        const timeoutId = setTimeout(() => controller.abort(), EMBEDDING_TIMEOUT_MS);
 
         const response = await fetch(url, {
           method: 'POST',
