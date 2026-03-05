@@ -25,8 +25,8 @@ export const proxyRoutes = Router();
 // Constants
 // ============================================
 
-const REQUEST_TIMEOUT_MS = 600000; // 10 minutes
-const EMBEDDING_TIMEOUT_MS = 600000; // 10 minutes — large batch embeddings need much more time
+const REQUEST_TIMEOUT_MS = 1800000; // 30 minutes
+const EMBEDDING_TIMEOUT_MS = 1800000; // 30 minutes
 
 // ============================================
 // Types
